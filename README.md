@@ -26,6 +26,11 @@
 - **Ask Feature**: Chat with your repository using RAG-powered AI to get accurate answers
 - **DeepResearch**: Multi-turn research process that thoroughly investigates complex topics
 - **Multiple Model Providers**: Support for Google Gemini, OpenAI, OpenRouter, and local Ollama models
+- **Individual Page Refresh**: Instantly refresh/regenerate a single wiki page instead of the entire wiki, with per-page model selection.
+- **Comprehensive Analytics**: View detailed statistics (model used, tokens consumed, elapsed time) for full wiki analysis and for each individual page.
+- **Dynamic Ollama Model Discovery**: Automatically detects available Ollama models for selection in both full wiki and single page workflows.
+- **Enhanced UI Feedback**: Real-time progress indicators, elapsed time, and text count during structure/page generation; improved error and loading states.
+- **Improved Caching**: Refreshed pages are auto-saved with updated analytics and progress tracking.
 
 ## 🚀 Quick Start (Super Easy!)
 
@@ -107,6 +112,8 @@ yarn dev
 2. Enter a GitHub, GitLab, or Bitbucket repository (like `https://github.com/openai/codex`, `https://github.com/microsoft/autogen`, `https://gitlab.com/gitlab-org/gitlab`, or `https://bitbucket.org/redradish/atlassian_app_versions`)
 3. For private repositories, click "+ Add access tokens" and enter your GitHub or GitLab personal access token
 4. Click "Generate Wiki" and watch the magic happen!
+5. Once your wiki is generated, you can refresh any page individually using the new refresh buttons next to each page in the navigation tree or at the top of the page.
+6. Check analytics for cost and performance data for the entire wiki or any page.
 
 ## 🔍 How It Works
 
@@ -119,6 +126,9 @@ DeepWiki uses AI to:
 5. Organize everything into a structured wiki
 6. Enable intelligent Q&A with the repository through the Ask feature
 7. Provide in-depth research capabilities with DeepResearch
+8. Refresh Individual Pages: Instantly update any single documentation page without updating the whole wiki.
+9. Track Analytics: See which model was used, tokens spent, and timings for wiki and individual pages.
+
 
 ```mermaid
 graph TD
@@ -190,7 +200,8 @@ DeepWiki now implements a flexible provider-based model selection system support
 - **OpenAI**: Default `gpt-5-nano`, also supports `gpt-5`, `4o`, etc.
 - **OpenRouter**: Access to multiple models via a unified API, including Claude, Llama, Mistral, etc.
 - **Azure OpenAI**: Default `gpt-4o`, also supports `o4-mini`, etc.
-- **Ollama**: Support for locally running open-source models like `llama3`
+- **Ollama**: Support for locally running open-source models like `llama3`. 
+  - Now supports dynamic listing of local Ollama models for real-time model switching, thanks to API querying.
 
 ### Environment Variables
 
@@ -540,6 +551,7 @@ To use DeepResearch, simply toggle the "Deep Research" switch in the Ask interfa
 1. **Restart both servers**: Sometimes a simple restart fixes most issues
 2. **Check console logs**: Open browser developer tools to see any JavaScript errors
 3. **Check API logs**: Look at the terminal where the API is running for Python errors
+4. If you see new analytics fields in the cache or face legacy cache compatibility issues, clear cache or follow the new update prompts.
 
 ## 🤝 Contributing
 
@@ -554,4 +566,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## ⭐ Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=AsyncFuncAI/deepwiki-open&type=Date)](https://star-history.com/#AsyncFuncAI/deepwiki-open&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=79man/deepwiki-open&type=Date)](https://star-history.com/#79man/deepwiki-open&Date)
