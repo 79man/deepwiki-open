@@ -1,3 +1,6 @@
+from api.config import configs, WIKI_AUTH_MODE, WIKI_AUTH_CODE
+from api.websocket_wiki import handle_websocket_chat
+from api.simple_chat import chat_completions_stream
 import os
 import logging
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
@@ -9,6 +12,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 import google.generativeai as genai
 import asyncio
+from api.config import get_model_config as get_model_configuration
 
 # Configure logging
 from api.logging_config import setup_logging
@@ -33,10 +37,14 @@ app.add_middleware(
 )
 
 # Helper function to get adalflow root path
+
+
 def get_adalflow_default_root_path():
     return os.path.expanduser(os.path.join("~", ".adalflow"))
 
 # --- Pydantic Models ---
+
+
 class WikiPage(BaseModel):
     """
     Model for a wiki page.
@@ -45,17 +53,19 @@ class WikiPage(BaseModel):
     title: str
     content: str
     filePaths: List[str]
-    importance: str # Should ideally be Literal['high', 'medium', 'low']
+    importance: str  # Should ideally be Literal['high', 'medium', 'low']
     relatedPages: List[str]
+
 
 class ProcessedProjectEntry(BaseModel):
     id: str  # Filename
     owner: str
     repo: str
     name: str  # owner/repo
-    repo_type: str # Renamed from type to repo_type for clarity with existing models
-    submittedAt: int # Timestamp
-    language: str # Extracted from filename
+    repo_type: str  # Renamed from type to repo_type for clarity with existing models
+    submittedAt: int  # Timestamp
+    language: str  # Extracted from filename
+
 
 class RepoInfo(BaseModel):
     owner: str
@@ -87,16 +97,22 @@ class WikiStructureModel(BaseModel):
     sections: Optional[List[WikiSection]] = None
     rootSections: Optional[List[str]] = None
 
+
 class WikiCacheData(BaseModel):
     """
     Model for the data to be stored in the wiki cache.
     """
     wiki_structure: WikiStructureModel
     generated_pages: Dict[str, WikiPage]
-    repo_url: Optional[str] = None  #compatible for old cache
+    repo_url: Optional[str] = None  # compatible for old cache
     repo: Optional[RepoInfo] = None
     provider: Optional[str] = None
     model: Optional[str] = None
+    # Wiki Analytics Information
+    wiki_analytics: Optional[Dict[str, Any]] = None
+    page_analytics: Optional[Dict[str, Dict[str, Any]]
+                             ] = None  # Per page Analytics Information
+
 
 class WikiCacheRequest(BaseModel):
     """
@@ -108,22 +124,34 @@ class WikiCacheRequest(BaseModel):
     generated_pages: Dict[str, WikiPage]
     provider: str
     model: str
+    # Wiki Analytics Information
+    wiki_analytics: Optional[Dict[str, Any]] = None
+    page_analytics: Optional[Dict[str, Dict[str, Any]]
+                             ] = None  # Per page Analytics Information
+
 
 class WikiExportRequest(BaseModel):
     """
     Model for requesting a wiki export.
     """
     repo_url: str = Field(..., description="URL of the repository")
-    pages: List[WikiPage] = Field(..., description="List of wiki pages to export")
-    format: Literal["markdown", "json"] = Field(..., description="Export format (markdown or json)")
+    pages: List[WikiPage] = Field(...,
+                                  description="List of wiki pages to export")
+    format: Literal["markdown",
+                    "json"] = Field(..., description="Export format (markdown or json)")
 
 # --- Model Configuration Models ---
+
+
 class Model(BaseModel):
     """
     Model for LLM model configuration
     """
     id: str = Field(..., description="Model identifier")
     name: str = Field(..., description="Display name for the model")
+    parameters: Dict[str, Any] = Field(
+        default_factory=dict, description="Model configuration parameters")
+
 
 class Provider(BaseModel):
     """
@@ -131,24 +159,29 @@ class Provider(BaseModel):
     """
     id: str = Field(..., description="Provider identifier")
     name: str = Field(..., description="Display name for the provider")
-    models: List[Model] = Field(..., description="List of available models for this provider")
-    supportsCustomModel: Optional[bool] = Field(False, description="Whether this provider supports custom models")
+    models: List[Model] = Field(...,
+                                description="List of available models for this provider")
+    supportsCustomModel: Optional[bool] = Field(
+        False, description="Whether this provider supports custom models")
+
 
 class ModelConfig(BaseModel):
     """
     Model for the entire model configuration
     """
-    providers: List[Provider] = Field(..., description="List of available model providers")
+    providers: List[Provider] = Field(...,
+                                      description="List of available model providers")
     defaultProvider: str = Field(..., description="ID of the default provider")
+
 
 class AuthorizationConfig(BaseModel):
     code: str = Field(..., description="Authorization code")
 
-from api.config import configs, WIKI_AUTH_MODE, WIKI_AUTH_CODE
 
 @app.get("/lang/config")
 async def get_lang_config():
     return configs["lang_config"]
+
 
 @app.get("/auth/status")
 async def get_auth_status():
@@ -157,12 +190,14 @@ async def get_auth_status():
     """
     return {"auth_required": WIKI_AUTH_MODE}
 
+
 @app.post("/auth/validate")
 async def validate_auth_code(request: AuthorizationConfig):
     """
     Check authorization code.
     """
     return {"success": WIKI_AUTH_CODE == request.code}
+
 
 @app.get("/models/config", response_model=ModelConfig)
 async def get_model_config():
@@ -185,17 +220,40 @@ async def get_model_config():
         # Add provider configuration based on config.py
         for provider_id, provider_config in configs["providers"].items():
             models = []
-            # Add models from config
-            for model_id in provider_config["models"].keys():
-                # Get a more user-friendly display name if possible
-                models.append(Model(id=model_id, name=model_id))
+            if provider_id == "ollama":
+                # Dynamically fetch Ollama models
+                from api.ollama_patch import get_ollama_models
+
+                ollama_models = get_ollama_models()
+                for model_name in ollama_models:
+                    model_config = get_model_configuration(
+                        provider_id, model_name)
+                    model_params = model_config.get("model_kwargs", {})
+                    models.append(Model(
+                        id=model_name,
+                        name=model_name,
+                        parameters=model_params
+                    ))
+            else:
+                # Add models from config
+                for model_id in provider_config["models"].keys():
+                    model_config = get_model_configuration(
+                        provider_id, model_id)
+                    model_params = model_config.get("model_kwargs", {})
+                    # Get a more user-friendly display name if possible
+                    models.append(Model(
+                        id=model_id,
+                        name=model_id,
+                        parameters=model_params
+                    ))
 
             # Add provider with its models
             providers.append(
                 Provider(
                     id=provider_id,
                     name=f"{provider_id.capitalize()}",
-                    supportsCustomModel=provider_config.get("supportsCustomModel", False),
+                    supportsCustomModel=provider_config.get(
+                        "supportsCustomModel", False),
                     models=models
                 )
             )
@@ -224,6 +282,7 @@ async def get_model_config():
             defaultProvider="google"
         )
 
+
 @app.post("/export/wiki")
 async def export_wiki(request: WikiExportRequest):
     """
@@ -236,7 +295,8 @@ async def export_wiki(request: WikiExportRequest):
         A downloadable file in the requested format
     """
     try:
-        logger.info(f"Exporting wiki for {request.repo_url} in {request.format} format")
+        logger.info(
+            f"Exporting wiki for {request.repo_url} in {request.format} format")
 
         # Extract repository name from URL for the filename
         repo_parts = request.repo_url.rstrip('/').split('/')
@@ -272,13 +332,15 @@ async def export_wiki(request: WikiExportRequest):
         logger.error(error_msg)
         raise HTTPException(status_code=500, detail=error_msg)
 
+
 @app.get("/local_repo/structure")
 async def get_local_repo_structure(path: str = Query(None, description="Path to local repository")):
     """Return the file tree and README content for a local repository."""
     if not path:
         return JSONResponse(
             status_code=400,
-            content={"error": "No path provided. Please provide a 'path' query parameter."}
+            content={
+                "error": "No path provided. Please provide a 'path' query parameter."}
         )
 
     if not os.path.isdir(path):
@@ -294,12 +356,14 @@ async def get_local_repo_structure(path: str = Query(None, description="Path to 
 
         for root, dirs, files in os.walk(path):
             # Exclude hidden dirs/files and virtual envs
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__' and d != 'node_modules' and d != '.venv']
+            dirs[:] = [d for d in dirs if not d.startswith(
+                '.') and d != '__pycache__' and d != 'node_modules' and d != '.venv']
             for file in files:
                 if file.startswith('.') or file == '__init__.py' or file == '.DS_Store':
                     continue
                 rel_dir = os.path.relpath(root, path)
-                rel_file = os.path.join(rel_dir, file) if rel_dir != '.' else file
+                rel_file = os.path.join(
+                    rel_dir, file) if rel_dir != '.' else file
                 file_tree_lines.append(rel_file)
                 # Find README.md (case-insensitive)
                 if file.lower() == 'readme.md' and not readme_content:
@@ -318,6 +382,7 @@ async def get_local_repo_structure(path: str = Query(None, description="Path to 
             status_code=500,
             content={"error": f"Error processing local repository: {str(e)}"}
         )
+
 
 def generate_markdown_export(repo_url: str, pages: List[WikiPage]) -> str:
     """
@@ -345,26 +410,28 @@ def generate_markdown_export(repo_url: str, pages: List[WikiPage]) -> str:
         markdown += f"<a id='{page.id}'></a>\n\n"
         markdown += f"## {page.title}\n\n"
 
-
-
         # Add related pages
         if page.relatedPages and len(page.relatedPages) > 0:
             markdown += "### Related Pages\n\n"
             related_titles = []
             for related_id in page.relatedPages:
                 # Find the title of the related page
-                related_page = next((p for p in pages if p.id == related_id), None)
+                related_page = next(
+                    (p for p in pages if p.id == related_id), None)
                 if related_page:
-                    related_titles.append(f"[{related_page.title}](#{related_id})")
+                    related_titles.append(
+                        f"[{related_page.title}](#{related_id})")
 
             if related_titles:
-                markdown += "Related topics: " + ", ".join(related_titles) + "\n\n"
+                markdown += "Related topics: " + \
+                    ", ".join(related_titles) + "\n\n"
 
         # Add page content
         markdown += f"{page.content}\n\n"
         markdown += "---\n\n"
 
     return markdown
+
 
 def generate_json_export(repo_url: str, pages: List[WikiPage]) -> str:
     """
@@ -390,12 +457,12 @@ def generate_json_export(repo_url: str, pages: List[WikiPage]) -> str:
     # Convert to JSON string with pretty formatting
     return json.dumps(export_data, indent=2)
 
+
 # Import the simplified chat implementation
-from api.simple_chat import chat_completions_stream
-from api.websocket_wiki import handle_websocket_chat
 
 # Add the chat_completions_stream endpoint to the main app
-app.add_api_route("/chat/completions/stream", chat_completions_stream, methods=["POST"])
+app.add_api_route("/chat/completions/stream",
+                  chat_completions_stream, methods=["POST"])
 
 # Add the WebSocket endpoint
 app.add_websocket_route("/ws/chat", handle_websocket_chat)
@@ -405,10 +472,12 @@ app.add_websocket_route("/ws/chat", handle_websocket_chat)
 WIKI_CACHE_DIR = os.path.join(get_adalflow_default_root_path(), "wikicache")
 os.makedirs(WIKI_CACHE_DIR, exist_ok=True)
 
+
 def get_wiki_cache_path(owner: str, repo: str, repo_type: str, language: str) -> str:
     """Generates the file path for a given wiki cache."""
     filename = f"deepwiki_cache_{repo_type}_{owner}_{repo}_{language}.json"
     return os.path.join(WIKI_CACHE_DIR, filename)
+
 
 async def read_wiki_cache(owner: str, repo: str, repo_type: str, language: str) -> Optional[WikiCacheData]:
     """Reads wiki cache data from the file system."""
@@ -423,9 +492,11 @@ async def read_wiki_cache(owner: str, repo: str, repo_type: str, language: str) 
             return None
     return None
 
+
 async def save_wiki_cache(data: WikiCacheRequest) -> bool:
     """Saves wiki cache data to the file system."""
-    cache_path = get_wiki_cache_path(data.repo.owner, data.repo.repo, data.repo.type, data.language)
+    cache_path = get_wiki_cache_path(
+        data.repo.owner, data.repo.repo, data.repo.type, data.language)
     logger.info(f"Attempting to save wiki cache. Path: {cache_path}")
     try:
         payload = WikiCacheData(
@@ -433,16 +504,19 @@ async def save_wiki_cache(data: WikiCacheRequest) -> bool:
             generated_pages=data.generated_pages,
             repo=data.repo,
             provider=data.provider,
-            model=data.model
+            model=data.model,
+            wiki_analytics=data.wiki_analytics,
+            page_analytics=data.page_analytics
         )
         # Log size of data to be cached for debugging (avoid logging full content if large)
         try:
             payload_json = payload.model_dump_json()
             payload_size = len(payload_json.encode('utf-8'))
-            logger.info(f"Payload prepared for caching. Size: {payload_size} bytes.")
+            logger.info(
+                f"Payload prepared for caching. Size: {payload_size} bytes.")
         except Exception as ser_e:
-            logger.warning(f"Could not serialize payload for size logging: {ser_e}")
-
+            logger.warning(
+                f"Could not serialize payload for size logging: {ser_e}")
 
         logger.info(f"Writing cache file to: {cache_path}")
         with open(cache_path, 'w', encoding='utf-8') as f:
@@ -450,19 +524,23 @@ async def save_wiki_cache(data: WikiCacheRequest) -> bool:
         logger.info(f"Wiki cache successfully saved to {cache_path}")
         return True
     except IOError as e:
-        logger.error(f"IOError saving wiki cache to {cache_path}: {e.strerror} (errno: {e.errno})", exc_info=True)
+        logger.error(
+            f"IOError saving wiki cache to {cache_path}: {e.strerror} (errno: {e.errno})", exc_info=True)
         return False
     except Exception as e:
-        logger.error(f"Unexpected error saving wiki cache to {cache_path}: {e}", exc_info=True)
+        logger.error(
+            f"Unexpected error saving wiki cache to {cache_path}: {e}", exc_info=True)
         return False
 
 # --- Wiki Cache API Endpoints ---
+
 
 @app.get("/api/wiki_cache", response_model=Optional[WikiCacheData])
 async def get_cached_wiki(
     owner: str = Query(..., description="Repository owner"),
     repo: str = Query(..., description="Repository name"),
-    repo_type: str = Query(..., description="Repository type (e.g., github, gitlab)"),
+    repo_type: str = Query(...,
+                           description="Repository type (e.g., github, gitlab)"),
     language: str = Query(..., description="Language of the wiki content")
 ):
     """
@@ -473,15 +551,18 @@ async def get_cached_wiki(
     if not supported_langs.__contains__(language):
         language = configs["lang_config"]["default"]
 
-    logger.info(f"Attempting to retrieve wiki cache for {owner}/{repo} ({repo_type}), lang: {language}")
+    logger.info(
+        f"Attempting to retrieve wiki cache for {owner}/{repo} ({repo_type}), lang: {language}")
     cached_data = await read_wiki_cache(owner, repo, repo_type, language)
     if cached_data:
         return cached_data
     else:
         # Return 200 with null body if not found, as frontend expects this behavior
         # Or, raise HTTPException(status_code=404, detail="Wiki cache not found") if preferred
-        logger.info(f"Wiki cache not found for {owner}/{repo} ({repo_type}), lang: {language}")
+        logger.info(
+            f"Wiki cache not found for {owner}/{repo} ({repo_type}), lang: {language}")
         return None
+
 
 @app.post("/api/wiki_cache")
 async def store_wiki_cache(request_data: WikiCacheRequest):
@@ -494,20 +575,25 @@ async def store_wiki_cache(request_data: WikiCacheRequest):
     if not supported_langs.__contains__(request_data.language):
         request_data.language = configs["lang_config"]["default"]
 
-    logger.info(f"Attempting to save wiki cache for {request_data.repo.owner}/{request_data.repo.repo} ({request_data.repo.type}), lang: {request_data.language}")
+    logger.info(
+        f"Attempting to save wiki cache for {request_data.repo.owner}/{request_data.repo.repo} ({request_data.repo.type}), lang: {request_data.language}")
     success = await save_wiki_cache(request_data)
     if success:
         return {"message": "Wiki cache saved successfully"}
     else:
-        raise HTTPException(status_code=500, detail="Failed to save wiki cache")
+        raise HTTPException(
+            status_code=500, detail="Failed to save wiki cache")
+
 
 @app.delete("/api/wiki_cache")
 async def delete_wiki_cache(
     owner: str = Query(..., description="Repository owner"),
     repo: str = Query(..., description="Repository name"),
-    repo_type: str = Query(..., description="Repository type (e.g., github, gitlab)"),
+    repo_type: str = Query(...,
+                           description="Repository type (e.g., github, gitlab)"),
     language: str = Query(..., description="Language of the wiki content"),
-    authorization_code: Optional[str] = Query(None, description="Authorization code")
+    authorization_code: Optional[str] = Query(
+        None, description="Authorization code")
 ):
     """
     Deletes a specific wiki cache from the file system.
@@ -515,14 +601,17 @@ async def delete_wiki_cache(
     # Language validation
     supported_langs = configs["lang_config"]["supported_languages"]
     if not supported_langs.__contains__(language):
-        raise HTTPException(status_code=400, detail="Language is not supported")
+        raise HTTPException(
+            status_code=400, detail="Language is not supported")
 
     if WIKI_AUTH_MODE:
         logger.info("check the authorization code")
         if WIKI_AUTH_CODE != authorization_code:
-            raise HTTPException(status_code=401, detail="Authorization code is invalid")
+            raise HTTPException(
+                status_code=401, detail="Authorization code is invalid")
 
-    logger.info(f"Attempting to delete wiki cache for {owner}/{repo} ({repo_type}), lang: {language}")
+    logger.info(
+        f"Attempting to delete wiki cache for {owner}/{repo} ({repo_type}), lang: {language}")
     cache_path = get_wiki_cache_path(owner, repo, repo_type, language)
 
     if os.path.exists(cache_path):
@@ -532,10 +621,12 @@ async def delete_wiki_cache(
             return {"message": f"Wiki cache for {owner}/{repo} ({language}) deleted successfully"}
         except Exception as e:
             logger.error(f"Error deleting wiki cache {cache_path}: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to delete wiki cache: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to delete wiki cache: {str(e)}")
     else:
         logger.warning(f"Wiki cache not found, cannot delete: {cache_path}")
         raise HTTPException(status_code=404, detail="Wiki cache not found")
+
 
 @app.get("/health")
 async def health_check():
@@ -545,6 +636,7 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "service": "deepwiki-api"
     }
+
 
 @app.get("/")
 async def root():
@@ -561,7 +653,8 @@ async def root():
             group = path_parts[0].capitalize() if path_parts[0] else "Root"
             method_list = list(route.methods - {"HEAD", "OPTIONS"})
             for method in method_list:
-                endpoints.setdefault(group, []).append(f"{method} {route.path}")
+                endpoints.setdefault(group, []).append(
+                    f"{method} {route.path}")
 
     # Optionally, sort endpoints for readability
     for group in endpoints:
@@ -574,6 +667,8 @@ async def root():
     }
 
 # --- Processed Projects Endpoint --- (New Endpoint)
+
+
 @app.get("/api/processed_projects", response_model=List[ProcessedProjectEntry])
 async def get_processed_projects():
     """
@@ -585,18 +680,22 @@ async def get_processed_projects():
 
     try:
         if not os.path.exists(WIKI_CACHE_DIR):
-            logger.info(f"Cache directory {WIKI_CACHE_DIR} not found. Returning empty list.")
+            logger.info(
+                f"Cache directory {WIKI_CACHE_DIR} not found. Returning empty list.")
             return []
 
         logger.info(f"Scanning for project cache files in: {WIKI_CACHE_DIR}")
-        filenames = await asyncio.to_thread(os.listdir, WIKI_CACHE_DIR) # Use asyncio.to_thread for os.listdir
+        # Use asyncio.to_thread for os.listdir
+        filenames = await asyncio.to_thread(os.listdir, WIKI_CACHE_DIR)
 
         for filename in filenames:
             if filename.startswith("deepwiki_cache_") and filename.endswith(".json"):
                 file_path = os.path.join(WIKI_CACHE_DIR, filename)
                 try:
-                    stats = await asyncio.to_thread(os.stat, file_path) # Use asyncio.to_thread for os.stat
-                    parts = filename.replace("deepwiki_cache_", "").replace(".json", "").split('_')
+                    # Use asyncio.to_thread for os.stat
+                    stats = await asyncio.to_thread(os.stat, file_path)
+                    parts = filename.replace("deepwiki_cache_", "").replace(
+                        ".json", "").split('_')
 
                     # Expecting repo_type_owner_repo_language
                     # Example: deepwiki_cache_github_AsyncFuncAI_deepwiki-open_en.json
@@ -604,8 +703,9 @@ async def get_processed_projects():
                     if len(parts) >= 4:
                         repo_type = parts[0]
                         owner = parts[1]
-                        language = parts[-1] # language is the last part
-                        repo = "_".join(parts[2:-1]) # repo can contain underscores
+                        language = parts[-1]  # language is the last part
+                        # repo can contain underscores
+                        repo = "_".join(parts[2:-1])
 
                         project_entries.append(
                             ProcessedProjectEntry(
@@ -614,15 +714,17 @@ async def get_processed_projects():
                                 repo=repo,
                                 name=f"{owner}/{repo}",
                                 repo_type=repo_type,
-                                submittedAt=int(stats.st_mtime * 1000), # Convert to milliseconds
+                                # Convert to milliseconds
+                                submittedAt=int(stats.st_mtime * 1000),
                                 language=language
                             )
                         )
                     else:
-                        logger.warning(f"Could not parse project details from filename: {filename}")
+                        logger.warning(
+                            f"Could not parse project details from filename: {filename}")
                 except Exception as e:
                     logger.error(f"Error processing file {file_path}: {e}")
-                    continue # Skip this file on error
+                    continue  # Skip this file on error
 
         # Sort by most recent first
         project_entries.sort(key=lambda p: p.submittedAt, reverse=True)
@@ -630,5 +732,7 @@ async def get_processed_projects():
         return project_entries
 
     except Exception as e:
-        logger.error(f"Error listing processed projects from {WIKI_CACHE_DIR}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to list processed projects from server cache.")
+        logger.error(
+            f"Error listing processed projects from {WIKI_CACHE_DIR}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail="Failed to list processed projects from server cache.")

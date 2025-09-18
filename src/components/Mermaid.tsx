@@ -366,7 +366,18 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, className = '', zoomingEnabled
         setSvg('');
 
         // Render the chart directly without preprocessing
-        const { svg: renderedSvg } = await mermaid.render(idRef.current, chart);
+        const cleanChart = chart  
+          .replace(/<!--[\s\S]*?-->/g, '') // Remove HTML comments  
+          .replace(/<!-- MERMAID_VALIDAT[\s\S]*?-->/g, '') // Remove validation markers  
+          .split('\n')
+          .map(line => {  
+            // Fix duplicate node definitions on same line  
+            return line.replace(/(\w+)\[([^\]]+)\]\s+\1\s*-->/g, '$1[$2] -->');  
+          })  
+          .join('\n')  
+          .trim();
+          
+        const { svg: renderedSvg } = await mermaid.render(idRef.current, cleanChart);
 
         if (!isMounted) return;
 
@@ -387,7 +398,11 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, className = '', zoomingEnabled
         const errorMessage = err instanceof Error ? err.message : String(err);
 
         if (isMounted) {
-          setError(`Failed to render diagram: ${errorMessage}`);
+          if (errorMessage.includes('Parse error') || errorMessage.includes('got \'PS\'')) {  
+            setError(`Diagram syntax error: Invalid node definition or connection`);  
+          } else {  
+            setError(`Failed to render diagram: ${errorMessage}`);  
+          }
 
           if (mermaidRef.current) {
             mermaidRef.current.innerHTML = `

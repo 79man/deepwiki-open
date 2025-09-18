@@ -58,6 +58,29 @@ def check_ollama_model_exists(model_name: str, ollama_host: str = None) -> bool:
     except Exception as e:
         logger.warning(f"Error checking Ollama model availability: {e}")
         return False
+    
+def get_ollama_models(ollama_host: str = None) -> List[str]:  
+    """  
+    Fetch available models from Ollama server.  
+      
+    Returns:  
+        List[str]: List of available model names  
+    """  
+    if ollama_host is None:  
+        ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")  
+      
+    try:  
+        if ollama_host.endswith('/api'):  
+            ollama_host = ollama_host[:-4]  
+          
+        response = requests.get(f"{ollama_host}/api/tags", timeout=5)  
+        if response.status_code == 200:  
+            models_data = response.json()  
+            return [model.get('name', '') for model in models_data.get('models', [])]
+        return []  
+    except Exception as e:  
+        logger.warning(f"Could not fetch Ollama models: {e}")  
+        return []
 
 class OllamaDocumentProcessor(DataComponent):
     """

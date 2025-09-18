@@ -1,5 +1,5 @@
 {
-  "default_provider": "google",
+  "default_provider": "ollama",
   "providers": {
     "dashscope": {
       "default_model": "qwen-plus",
@@ -115,6 +115,13 @@
     },
     "ollama": {
       "default_model": "qwen3:1.7b",
+      "default_params": {
+        "options": {
+          "temperature": 0.7,
+          "top_p": 0.8,
+          "num_ctx": 32000
+        }
+      },
       "supportsCustomModel": true,
       "models": {
         "qwen3:1.7b": {
@@ -124,11 +131,11 @@
             "num_ctx": 32000
           }
         },
-        "llama3:8b": {
+        "llama3.2": {
           "options": {
             "temperature": 0.7,
             "top_p": 0.8,
-            "num_ctx": 8000
+            "num_ctx": 131072
           }
         },
         "qwen3:8b": {
@@ -196,4 +203,3 @@
     }
   }
 }
-

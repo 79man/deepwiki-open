@@ -12,7 +12,8 @@ from api.openrouter_client import OpenRouterClient
 from api.bedrock_client import BedrockClient
 from api.azureai_client import AzureAIClient
 from api.dashscope_client import DashscopeClient
-from adalflow import GoogleGenAIClient, OllamaClient
+from adalflow import GoogleGenAIClient #, OllamaClient
+from api.my_ollama_client import MyOllamaClient
 
 # Get API keys from environment variables
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
@@ -52,7 +53,7 @@ CLIENT_CLASSES = {
     "GoogleGenAIClient": GoogleGenAIClient,
     "OpenAIClient": OpenAIClient,
     "OpenRouterClient": OpenRouterClient,
-    "OllamaClient": OllamaClient,
+    "OllamaClient": MyOllamaClient,
     "BedrockClient": BedrockClient,
     "AzureAIClient": AzureAIClient,
     "DashscopeClient": DashscopeClient
@@ -128,7 +129,7 @@ def load_generator_config():
                     "google": GoogleGenAIClient,
                     "openai": OpenAIClient,
                     "openrouter": OpenRouterClient,
-                    "ollama": OllamaClient,
+                    "ollama": MyOllamaClient,
                     "bedrock": BedrockClient,
                     "azure": AzureAIClient,
                     "dashscope": DashscopeClient
@@ -173,12 +174,14 @@ def is_ollama_embedder():
         return False
 
     # Check if model_client is OllamaClient
-    model_client = embedder_config.get("model_client")
-    if model_client:
-        return model_client.__name__ == "OllamaClient"
+    embedder_cls = embedder_config.get("model_client")
+    if embedder_cls:
+        logger.info(f"Manoj: embedder_cls case {embedder_cls is CLIENT_CLASSES['OllamaClient']}")
+        return embedder_cls is CLIENT_CLASSES["OllamaClient"]
 
     # Fallback: check client_class string
     client_class = embedder_config.get("client_class", "")
+    logger.info(f"Manoj: Fallback case {client_class} == {'OllamaClient'} ({client_class == 'OllamaClient'}) ")
     return client_class == "OllamaClient"
 
 # Load repository and file filters configuration
@@ -315,28 +318,48 @@ def get_model_config(provider="google", model=None):
         if not model:
             raise ValueError(f"No default model specified for provider '{provider}'")
 
-    # Get model parameters (if present)
-    model_params = {}
-    if model in provider_config.get("models", {}):
-        model_params = provider_config["models"][model]
-    else:
-        default_model = provider_config.get("default_model")
-        model_params = provider_config["models"][default_model]
-
     # Prepare base configuration
     result = {
         "model_client": model_client,
     }
 
-    # Provider-specific adjustments
-    if provider == "ollama":
-        # Ollama uses a slightly different parameter structure
-        if "options" in model_params:
-            result["model_kwargs"] = {"model": model, **model_params["options"]}
-        else:
-            result["model_kwargs"] = {"model": model}
-    else:
-        # Standard structure for other providers
+    # Provider-specific adjustments  
+    if provider == "ollama":  
+        # Ollama uses a slightly different parameter structure with nested "options"  
+        model_params = None  
+        
+        # Try to get model-specific parameters first  
+        if model in provider_config.get("models", {}):  
+            model_params = provider_config["models"][model]  
+        elif "default_params" in provider_config:  
+            # Use provider-level default_params if available  
+            model_params = provider_config["default_params"]  
+        else:  
+            # Final fallback to hardcoded defaults  
+            result["model_kwargs"] = {  
+                "model": model,  
+                "temperature": 0.7,  
+                "top_p": 0.8,  
+                "num_ctx": 8192  
+            }  
+            return result  
+        
+        # Extract options from the found parameters  
+        if model_params and "options" in model_params:  
+            result["model_kwargs"] = {"model": model, **model_params["options"]}  
+        else:  
+            result["model_kwargs"] = {"model": model}  
+            
+    else:  
+        # Standard structure for other providers  
+        model_params = {}  
+        if model in provider_config.get("models", {}):  
+            model_params = provider_config["models"][model]  
+        else:  
+            default_model = provider_config.get("default_model")  
+            if default_model and default_model in provider_config.get("models", {}):  
+                model_params = provider_config["models"][default_model]  
+        
         result["model_kwargs"] = {"model": model, **model_params}
 
     return result

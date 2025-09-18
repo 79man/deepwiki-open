@@ -4,7 +4,8 @@ from typing import List, Optional, Dict, Any
 from urllib.parse import unquote
 
 import google.generativeai as genai
-from adalflow.components.model_client.ollama_client import OllamaClient
+# from adalflow.components.model_client.ollama_client import OllamaClient
+from .my_ollama_client import MyOllamaClient
 from adalflow.core.types import ModelType
 from fastapi import WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel, Field
@@ -15,7 +16,9 @@ from api.openai_client import OpenAIClient
 from api.openrouter_client import OpenRouterClient
 from api.azureai_client import AzureAIClient
 from api.dashscope_client import DashscopeClient
-from api.rag import RAG
+from api.rag import RAG, RAGAnswer
+import json
+from datetime import datetime
 
 # Configure logging
 from api.logging_config import setup_logging
@@ -23,6 +26,22 @@ from api.logging_config import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
+# Check if LLM logging is enabled via environment variable  
+LLM_LOGGING_ENABLED = os.environ.get('LLM_LOGGING_ENABLED', 'false').lower() in ['true', '1', 't', 'yes']  
+
+if LLM_LOGGING_ENABLED:
+    # Create a dedicated logger for LLM analysis  
+    llm_logger = logging.getLogger('llm_analysis')  
+    llm_logger.setLevel(logging.INFO)  
+    
+    # Create a separate file handler for LLM logs  
+    llm_handler = logging.FileHandler('api/logs/llm_analysis.log')  
+    llm_formatter = logging.Formatter('%(asctime)s - %(message)s')  
+    llm_handler.setFormatter(llm_formatter)  
+    llm_logger.addHandler(llm_handler)  
+    
+    # Prevent propagation to avoid duplicate logs in main log file  
+    llm_logger.propagate = False
 
 # Models for the API
 class ChatMessage(BaseModel):
@@ -194,8 +213,8 @@ async def handle_websocket_chat(websocket: WebSocket):
                 # Try to perform RAG retrieval
                 try:
                     # This will use the actual RAG implementation
-                    retrieved_documents = request_rag(rag_query, language=request.language)
-
+                    rag_answer, retrieved_documents = request_rag(rag_query, language=request.language)
+                    
                     if retrieved_documents and retrieved_documents[0].documents:
                         # Format context for the prompt in a more structured way
                         documents = retrieved_documents[0].documents
@@ -222,7 +241,7 @@ async def handle_websocket_chat(websocket: WebSocket):
                         # Join all parts with clear separation
                         context_text = "\n\n" + "-" * 10 + "\n\n".join(context_parts)
                     else:
-                        logger.warning("No documents retrieved from RAG")
+                        logger.warning(f"No documents retrieved from RAG: {rag_answer}")
                 except Exception as e:
                     logger.error(f"Error in RAG retrieval: {str(e)}")
                     # Continue without RAG if there's an error
@@ -428,10 +447,12 @@ This file contains...
 
         model_config = get_model_config(request.provider, request.model)["model_kwargs"]
 
+        logger.info(f"Manoj: request.provider, request.model:{request.provider}, {request.model}")
+        logger.info(f"Manoj: model_config:{model_config}")
         if request.provider == "ollama":
             prompt += " /no_think"
-
-            model = OllamaClient()
+            logger.info("Manoj: Creating MyOllamaClient")
+            model = MyOllamaClient()
             model_kwargs = {
                 "model": model_config["model"],
                 "stream": True,
@@ -542,16 +563,53 @@ This file contains...
         # Process the response based on the provider
         try:
             if request.provider == "ollama":
+                if LLM_LOGGING_ENABLED: 
+                    # Log the full prompt being sent  
+                    llm_logger.info(json.dumps({  
+                        "type": "prompt",  
+                        "timestamp": datetime.now().isoformat(),  
+                        "model": request.model,  
+                        "provider": request.provider,  
+                        "prompt": str(api_kwargs),  
+                        "repo_url": getattr(request, 'repo_url', 'unknown')  
+                    }))
+
                 # Get the response and handle it properly using the previously created api_kwargs
                 response = await model.acall(api_kwargs=api_kwargs, model_type=ModelType.LLM)
+                
+                # Collect full response for logging  
+                full_response = ""
                 # Handle streaming response from Ollama
                 async for chunk in response:
-                    text = getattr(chunk, 'response', None) or getattr(chunk, 'text', None) or str(chunk)
+                    # logger.debug(f"Manoj: WS Ollama RCV CHUNK: {chunk}")
+                    # Extract text from Ollama's message structure  
+                    text = None  
+                    if hasattr(chunk, 'message') and hasattr(chunk.message, 'content'):  
+                        text = chunk.message.content
+                        if LLM_LOGGING_ENABLED: 
+                            full_response += text
+                    else:  
+                        text = getattr(chunk, 'response', None) or getattr(chunk, 'text', None) or str(chunk)
+                        if LLM_LOGGING_ENABLED: 
+                            full_response += text
+                    
                     if text and not text.startswith('model=') and not text.startswith('created_at='):
                         text = text.replace('<think>', '').replace('</think>', '')
                         await websocket.send_text(text)
                 # Explicitly close the WebSocket connection after the response is complete
                 await websocket.close()
+
+                if LLM_LOGGING_ENABLED: 
+                    # Log the complete response  
+                    llm_logger.info(json.dumps({  
+                        "type": "response",   
+                        "timestamp": datetime.now().isoformat(),  
+                        "model": request.model,  
+                        "provider": request.provider,  
+                        "response": full_response,  
+                        "repo_url": getattr(request, 'repo_url', 'unknown')  
+                    }))
+
             elif request.provider == "openrouter":
                 try:
                     # Get the response and handle it properly using the previously created api_kwargs

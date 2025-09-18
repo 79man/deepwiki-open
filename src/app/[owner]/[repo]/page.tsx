@@ -230,6 +230,28 @@ export default function RepoWikiPage() {
   const [currentToken, setCurrentToken] = useState(token); // Track current effective token
   const [effectiveRepoInfo, setEffectiveRepoInfo] = useState(repoInfo); // Track effective repo info with cached data
   const [embeddingError, setEmbeddingError] = useState(false);
+  const [textReceivedCount, setTextReceivedCount] = useState(0);  
+  const [structureStartTime, setStructureStartTime] = useState<number | null>(null);  
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const [pageTextReceivedCount, setPageTextReceivedCount] = useState(0);  
+  const [pageStartTime, setPageStartTime] = useState<number | null>(null);  
+  const [pageElapsedTime, setPageElapsedTime] = useState(0);  
+  const [currentGeneratingPageId, setCurrentGeneratingPageId] = useState<string | null>(null);
+
+  // Analytics state  
+  const [wikiAnalytics, setWikiAnalytics] = useState<{  
+    model: string;  
+    provider: string;  
+    tokensReceived: number;  
+    timeTaken: number;  
+  } | null>(null);  
+    
+  const [pageAnalytics, setPageAnalytics] = useState<Record<string, {  
+    model: string;  
+    provider: string;  
+    tokensReceived: number;  
+    timeTaken: number;  
+  }>>({});
 
   // Model selection state variables
   const [selectedProviderState, setSelectedProviderState] = useState(providerParam);
@@ -360,12 +382,32 @@ export default function RepoWikiPage() {
     fetchAuthStatus();
   }, []);
 
+  useEffect(() => {  
+    let interval: NodeJS.Timeout;  
+    if (structureStartTime && structureRequestInProgress) {  
+      interval = setInterval(() => {  
+        setElapsedTime(Math.floor((Date.now() - structureStartTime) / 1000));  
+      }, 1000);  
+    }  
+    return () => clearInterval(interval);  
+  }, [structureStartTime, structureRequestInProgress]);
+
+  useEffect(() => {  
+    let interval: NodeJS.Timeout;  
+    if (pageStartTime && currentGeneratingPageId) {  
+      interval = setInterval(() => {  
+        setPageElapsedTime(Math.floor((Date.now() - pageStartTime) / 1000));  
+      }, 1000);  
+    }  
+    return () => clearInterval(interval);  
+  }, [pageStartTime, currentGeneratingPageId]);
+
   // Generate content for a wiki page
-  const generatePageContent = useCallback(async (page: WikiPage, owner: string, repo: string) => {
+  const generatePageContent = useCallback(async (page: WikiPage, owner: string, repo: string, force: boolean=false) => {
     return new Promise<void>(async (resolve) => {
       try {
         // Skip if content already exists
-        if (generatedPages[page.id]?.content) {
+        if (!force ||generatedPages[page.id]?.content) {
           resolve();
           return;
         }
@@ -386,6 +428,9 @@ export default function RepoWikiPage() {
         if (!owner || !repo) {
           throw new Error('Invalid repository information. Owner and repo name are required.');
         }
+
+        const pageStartTime = Date.now();  
+        let pageTokenCount = 0;  
 
         // Mark page as in progress
         setPagesInProgress(prev => new Set(prev).add(page.id));
@@ -438,8 +483,18 @@ Based ONLY on the content of the \`[RELEVANT_SOURCE_FILES]\`:
     *   Explain the architecture, components, data flow, or logic relevant to the section's focus, as evidenced in the source files.
     *   Identify key functions, classes, data structures, API endpoints, or configuration elements pertinent to that section.
 
-3.  **Mermaid Diagrams:**
-    *   EXTENSIVELY use Mermaid diagrams (e.g., \`flowchart TD\`, \`sequenceDiagram\`, \`classDiagram\`, \`erDiagram\`, \`graph TD\`) to visually represent architectures, flows, relationships, and schemas found in the source files.
+3. **Mermaid Diagrams with Validation:**  
+   * EXTENSIVELY use Mermaid diagrams (e.g., \`flowchart TD\`, \`sequenceDiagram\`, \`classDiagram\`, \`erDiagram\`, \`graph TD\`) to visually represent architectures, flows, relationships, and schemas found in the source files.  
+   * Before including any diagram, verify it follows these rules:  
+     - Use "graph TD" (top-down) directive ONLY  
+     - Node labels must be 3-4 words maximum  
+     - No special characters in node IDs (use alphanumeric only)  
+     - Proper arrow syntax: --> for connections  
+     - NO HTML comments or validation markers in diagram code  
+     - Avoid duplicate node definitions on the same line  
+     - Each node should be defined only once before being referenced  
+     - If diagram is complex, break into multiple simpler diagrams  
+     - Test syntax: each diagram must be parseable by Mermaid.js
     *   Ensure diagrams are accurate and directly derived from information in the \`[RELEVANT_SOURCE_FILES]\`.
     *   Provide a brief explanation before or after each diagram to give context.
     *   CRITICAL: All diagrams MUST follow strict vertical orientation:
@@ -512,13 +567,17 @@ Remember:
 
         // Add tokens if available
         addTokensToRequestBody(requestBody, currentToken, effectiveRepoInfo.type, selectedProviderState, selectedModelState, isCustomSelectedModelState, customSelectedModelState, language, modelExcludedDirs, modelExcludedFiles, modelIncludedDirs, modelIncludedFiles);
+        setCurrentGeneratingPageId(page.id);  
+        setPageStartTime(Date.now());  
+        setPageTextReceivedCount(0);  
+        setPageElapsedTime(0);  
 
         // Use WebSocket for communication
         let content = '';
 
         try {
           // Create WebSocket URL from the server base URL
-          const serverBaseUrl = process.env.SERVER_BASE_URL || 'http://localhost:8001';
+          const serverBaseUrl = process.env.NEXT_PUBLIC_SERVER_BASE_URL || 'http://localhost:8001';
           const wsBaseUrl = serverBaseUrl.replace(/^http/, 'ws')? serverBaseUrl.replace(/^https/, 'wss'): serverBaseUrl.replace(/^http/, 'ws');
           const wsUrl = `${wsBaseUrl}/ws/chat`;
 
@@ -560,6 +619,8 @@ Remember:
             // Handle incoming messages
             ws.onmessage = (event) => {
               content += event.data;
+              pageTokenCount += event.data.length;
+              setPageTextReceivedCount(prev => prev + event.data.length); 
             };
 
             // Handle WebSocket close
@@ -626,6 +687,17 @@ Remember:
         // Store this as the original for potential mermaid retries
         setOriginalMarkdown(prev => ({ ...prev, [page.id]: content }));
 
+        const timeTaken = Math.floor((Date.now() - pageStartTime) / 1000);  
+        setPageAnalytics(prev => ({  
+          ...prev,  
+          [page.id]: {  
+            model: selectedModelState || 'default',  
+            provider: selectedProviderState || 'default',  
+            tokensReceived: pageTokenCount,  
+            timeTaken  
+          }  
+        }));
+
         resolve();
       } catch (err) {
         console.error(`Error generating content for page ${page.id}:`, err);
@@ -650,9 +722,163 @@ Remember:
           return next;
         });
         setLoadingMessage(undefined); // Clear specific loading message
+        setCurrentGeneratingPageId(null);  
+        setPageStartTime(null);  
+        setPageTextReceivedCount(0);  
+        setPageElapsedTime(0);
       }
     });
   }, [generatedPages, currentToken, effectiveRepoInfo, selectedProviderState, selectedModelState, isCustomSelectedModelState, customSelectedModelState, modelExcludedDirs, modelExcludedFiles, language, activeContentRequests, generateFileUrl]);
+
+  const refreshPage = useCallback(async (pageId: string) => {
+    console.log(`refreshPage(${pageId}) called`);  
+    const page = wikiStructure?.pages.find(p => p.id === pageId);  
+    if (!page) return;
+
+    // Clear any existing request tracking for this page  
+    activeContentRequests.delete(pageId); 
+
+    // Reset cache loaded flag to allow auto-save after refresh  
+    cacheLoadedSuccessfully.current = false;
+
+    // Clear the existing content  
+    setGeneratedPages(prev => ({  
+      ...prev,  
+      [pageId]: { ...page, content: '' }  
+    }));  
+    
+    // Clear analytics for this page  
+    setPageAnalytics(prev => {  
+      const updated = { ...prev };  
+      delete updated[pageId];  
+      return updated;  
+    });
+
+    setIsLoading(true);  
+    setLoadingMessage(`Refreshing ${page.title}...`);  
+    
+
+    try {  
+      // Regenerate the page content  
+      await generatePageContent(page, effectiveRepoInfo.owner, effectiveRepoInfo.repo, true);  
+    } finally {  
+      setIsLoading(false);  
+      setLoadingMessage(undefined);  
+    }    
+  }, [wikiStructure, generatePageContent, effectiveRepoInfo]);
+
+  async function analyzeRepository(fileTree: string, readme: string): Promise<{  
+    type: string;  
+    primaryLanguage: string;  
+    framework: string;  
+    architecturePattern: string;  
+    complexityScore: number;  
+  }> {  
+    const files = fileTree.split('\n').filter(f => f.trim());  
+      
+    // Detect primary language  
+    const languageExtensions = {  
+      '.js': 'JavaScript',  
+      '.ts': 'TypeScript',   
+      '.tsx': 'TypeScript',  
+      '.jsx': 'JavaScript',  
+      '.py': 'Python',  
+      '.java': 'Java',  
+      '.cpp': 'C++',  
+      '.c': 'C',  
+      '.cs': 'C#',  
+      '.go': 'Go',  
+      '.rs': 'Rust',  
+      '.php': 'PHP',  
+      '.rb': 'Ruby'  
+    };  
+      
+    const langCounts: Record<string, number> = {};  
+    files.forEach(file => {  
+      const ext = file.substring(file.lastIndexOf('.'));  
+      const lang = languageExtensions[ext];  
+      if (lang) {  
+        langCounts[lang] = (langCounts[lang] || 0) + 1;  
+      }  
+    });  
+      
+    const primaryLanguage = Object.entries(langCounts)  
+      .sort(([,a], [,b]) => b - a)[0]?.[0] || 'Unknown';  
+      
+    // Detect framework  
+    let framework = 'Unknown';  
+    const packageJsonExists = files.some(f => f.includes('package.json'));  
+    const requirementsTxtExists = files.some(f => f.includes('requirements.txt'));  
+      
+    if (packageJsonExists) {  
+      if (files.some(f => f.includes('next.config'))) framework = 'Next.js';  
+      else if (files.some(f => f.includes('src/App.tsx') || f.includes('src/App.jsx'))) framework = 'React';  
+      else if (files.some(f => f.includes('angular.json'))) framework = 'Angular';  
+      else if (files.some(f => f.includes('vue.config'))) framework = 'Vue.js';  
+      else framework = 'Node.js';  
+    } else if (requirementsTxtExists) {  
+      if (files.some(f => f.includes('manage.py'))) framework = 'Django';  
+      else if (files.some(f => f.includes('app.py') || f.includes('main.py'))) framework = 'Flask/FastAPI';  
+      else framework = 'Python';  
+    }  
+      
+    // Detect architecture pattern  
+    let architecturePattern = 'Unknown';  
+    if (files.some(f => f.includes('api/') || f.includes('backend/')) &&   
+        files.some(f => f.includes('src/') || f.includes('frontend/'))) {  
+      architecturePattern = 'Full-stack';  
+    } else if (files.some(f => f.includes('api/') || f.includes('server/'))) {  
+      architecturePattern = 'Backend API';  
+    } else if (files.some(f => f.includes('components/') || f.includes('pages/'))) {  
+      architecturePattern = 'Frontend SPA';  
+    } else if (files.some(f => f.includes('lib/') || f.includes('src/lib'))) {  
+      architecturePattern = 'Library/Package';  
+    }  
+      
+    // Calculate complexity score (1-10)  
+    let complexityScore = 1;  
+    const fileCount = files.length;  
+    const dirDepth = Math.max(...files.map(f => f.split('/').length - 1));  
+    const hasTests = files.some(f => f.includes('test') || f.includes('spec'));  
+    const hasConfig = files.some(f => f.includes('config') || f.includes('.env'));  
+    const hasDocs = files.some(f => f.includes('docs/') || f.includes('README'));  
+      
+    // Base complexity on file count  
+    if (fileCount > 500) complexityScore += 4;  
+    else if (fileCount > 200) complexityScore += 3;  
+    else if (fileCount > 50) complexityScore += 2;  
+    else complexityScore += 1;  
+      
+    // Add complexity for directory depth  
+    if (dirDepth > 5) complexityScore += 2;  
+    else if (dirDepth > 3) complexityScore += 1;  
+      
+    // Add complexity for additional features  
+    if (hasTests) complexityScore += 1;  
+    if (hasConfig) complexityScore += 1;  
+    if (hasDocs) complexityScore += 1;  
+      
+    // Cap at 10  
+    complexityScore = Math.min(complexityScore, 10);  
+      
+    // Determine repository type  
+    let type = 'Application';  
+    if (framework.includes('Library') || architecturePattern === 'Library/Package') {  
+      type = 'Library';  
+    } else if (readme.toLowerCase().includes('api') || architecturePattern === 'Backend API') {  
+      type = 'API Service';  
+    } else if (architecturePattern === 'Full-stack') {  
+      type = 'Full-stack Application';  
+    }  
+      
+    return {  
+      type,  
+      primaryLanguage,  
+      framework,  
+      architecturePattern,  
+      complexityScore  
+    };  
+  }
 
   // Determine the wiki structure from repository data
   const determineWikiStructure = useCallback(async (fileTree: string, readme: string, owner: string, repo: string) => {
@@ -671,10 +897,17 @@ Remember:
 
     try {
       setStructureRequestInProgress(true);
+      setStructureStartTime(Date.now());  
+      setTextReceivedCount(0);  
+      setElapsedTime(0);
       setLoadingMessage(messages.loading?.determiningStructure || 'Determining wiki structure...');
+      const structureStartTime = Date.now();  
+      let structureTokenCount = 0;
 
       // Get repository URL
       const repoUrl = getRepoUrl(effectiveRepoInfo);
+
+      const repoAnalysis = await analyzeRepository(fileTree, readme);
 
       // Prepare request body
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -683,12 +916,20 @@ Remember:
         type: effectiveRepoInfo.type,
         messages: [{
           role: 'user',
-content: `Analyze this GitHub repository ${owner}/${repo} and create a wiki structure for it.
-
-1. The complete file tree of the project:
-<file_tree>
-${fileTree}
-</file_tree>
+content: `Analyze this ${repoAnalysis.type} repository ${owner}/${repo} and create a wiki structure for it.
+  
+Repository Analysis:  
+- Primary Language: ${repoAnalysis.primaryLanguage}  
+- Framework: ${repoAnalysis.framework}  
+- Architecture Pattern: ${repoAnalysis.architecturePattern}  
+- Complexity Score: ${repoAnalysis.complexityScore}/10  
+  
+Based on this analysis, suggest a ${repoAnalysis.complexityScore > 7 ? 'comprehensive' : 'concise'} wiki structure.  
+  
+1. The complete file tree of the project:  
+<file_tree>  
+${fileTree}  
+</file_tree>  
 
 2. The README file of the project:
 <readme>
@@ -815,7 +1056,7 @@ IMPORTANT:
 
       try {
         // Create WebSocket URL from the server base URL
-        const serverBaseUrl = process.env.SERVER_BASE_URL || 'http://localhost:8001';
+        const serverBaseUrl = process.env.NEXT_PUBLIC_SERVER_BASE_URL || 'http://localhost:8001';
         const wsBaseUrl = serverBaseUrl.replace(/^http/, 'ws')? serverBaseUrl.replace(/^https/, 'wss'): serverBaseUrl.replace(/^http/, 'ws');
         const wsUrl = `${wsBaseUrl}/ws/chat`;
 
@@ -856,7 +1097,9 @@ IMPORTANT:
         await new Promise<void>((resolve, reject) => {
           // Handle incoming messages
           ws.onmessage = (event) => {
-            responseText += event.data;
+            responseText += event.data;            
+            structureTokenCount += event.data.length;  
+            setTextReceivedCount(prev => prev + event.data.length);
           };
 
           // Handle WebSocket close
@@ -913,17 +1156,32 @@ IMPORTANT:
          throw new Error('The specified Ollama embedding model was not found. Please ensure the model is installed locally or select a different embedding model in the configuration.');
        }
 
-        // Clean up markdown delimiters
+      // Add your debug line here:  
+      // console.log('Full AI response:', responseText);  
+       // Clean up markdown delimiters
       responseText = responseText.replace(/^```(?:xml)?\s*/i, '').replace(/```\s*$/i, '');
-
+      
       // Extract wiki structure from response
       const xmlMatch = responseText.match(/<wiki_structure>[\s\S]*?<\/wiki_structure>/m);
       if (!xmlMatch) {
         throw new Error('No valid XML found in response');
       }
 
+      // Proper XML escaping function
+      function cleanXmlString(str: string) {
+        return str
+          // Replace illegal/unescaped &
+          .replace(/&(?!(amp|lt|gt|quot|apos|#\d+|#x[\da-fA-F]+);)/g, '&amp;')
+          // Remove forbidden ASCII control characters
+          .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+          // Replace string-escaped newlines/tabs (if present)
+          .replace(/\\n/g, "\n")
+          .replace(/\\t/g, "  ")
+          .replace(/\\r/g, "");
+      }
+
       let xmlText = xmlMatch[0];
-      xmlText = xmlText.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+      xmlText = cleanXmlString(xmlText);
       // Try parsing with DOMParser
       const parser = new DOMParser();
       const xmlDoc = parser.parseFromString(xmlText, "text/xml");
@@ -1057,6 +1315,14 @@ IMPORTANT:
       };
 
       setWikiStructure(wikiStructure);
+      const timeTaken = Math.floor((Date.now() - structureStartTime) / 1000);  
+      setWikiAnalytics({  
+        model: selectedModelState || 'default',  
+        provider: selectedProviderState || 'default',  
+        tokensReceived: structureTokenCount,  
+        timeTaken  
+      });
+
       setCurrentPageId(pages.length > 0 ? pages[0].id : undefined);
 
       // Start generating content for all pages with controlled concurrency
@@ -1134,6 +1400,9 @@ IMPORTANT:
       setLoadingMessage(undefined);
     } finally {
       setStructureRequestInProgress(false);
+      setStructureStartTime(null);  
+      setTextReceivedCount(0);  
+      setElapsedTime(0);
     }
   }, [generatePageContent, currentToken, effectiveRepoInfo, pagesInProgress.size, structureRequestInProgress, selectedProviderState, selectedModelState, isCustomSelectedModelState, customSelectedModelState, modelExcludedDirs, modelExcludedFiles, language, messages.loading, isComprehensiveView]);
 
@@ -1879,7 +2148,9 @@ IMPORTANT:
               wiki_structure: structureToCache,
               generated_pages: generatedPages,
               provider: selectedProviderState,
-              model: selectedModelState
+              model: selectedModelState,
+              wiki_analytics: wikiAnalytics,  
+              page_analytics: pageAnalytics
             };
             const response = await fetch(`/api/wiki_cache`, {
               method: 'POST',
@@ -1910,6 +2181,18 @@ IMPORTANT:
     }
   };
 
+  const formatElapsedTime = (totalSeconds: number): string => {  
+    const hours = Math.floor(totalSeconds / 3600);  
+    const minutes = Math.floor((totalSeconds % 3600) / 60);  
+    const seconds = totalSeconds % 60;  
+      
+    if (hours > 0) {  
+      return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;  
+    } else {  
+      return `${minutes}:${seconds.toString().padStart(2, '0')}`;  
+    }  
+  };
+
   const [isModelSelectionModalOpen, setIsModelSelectionModalOpen] = useState(false);
 
   return (
@@ -1937,11 +2220,27 @@ IMPORTANT:
                 <div className="w-3 h-3 bg-[var(--accent-primary)]/70 rounded-full animate-pulse delay-150"></div>
               </div>
             </div>
-            <p className="text-[var(--foreground)] text-center mb-3 font-serif">
-              {loadingMessage || messages.common?.loading || 'Loading...'}
+            <div className="text-[var(--foreground)] text-center mb-3 font-serif">
+              {loadingMessage || messages.common?.loading || 'Loading...'}              
               {isExporting && (messages.loading?.preparingDownload || ' Please wait while we prepare your download...')}
-            </p>
+              
+              {/* Structure generation metrics */}  
+              {structureRequestInProgress && (  
+                <div className="mt-2 text-sm text-[var(--muted)]">  
+                  <div>Text received: {textReceivedCount.toLocaleString()} characters</div>  
+                  <div>Time elapsed: {formatElapsedTime(elapsedTime)}</div>  
+                </div>  
+              )}
 
+              {/* Page generation metrics */}  
+              {currentGeneratingPageId && (  
+                <div className="mt-2 text-sm text-[var(--muted)]">  
+                  <div>Generating: {wikiStructure?.pages.find(p => p.id === currentGeneratingPageId)?.title}</div>  
+                  <div>Text received: {pageTextReceivedCount.toLocaleString()} characters</div>  
+                  <div>Time elapsed: {formatElapsedTime(pageElapsedTime)}</div>  
+                </div>  
+              )}
+            </div>
             {/* Progress bar for page generation */}
             {wikiStructure && (
               <div className="w-full max-w-md mt-3">
@@ -2072,6 +2371,59 @@ IMPORTANT:
                 </button>
               </div>
 
+              {/* Analytics Section */}  
+              <div className="mb-5">  
+                <h4 className="text-sm font-semibold text-[var(--foreground)] mb-3 font-serif">  
+                  Generation Analytics  
+                </h4>  
+                  
+                {(wikiAnalytics || Object.keys(pageAnalytics).length > 0) ? (  
+                  <>  
+                    {/* Wiki Analysis Stats */}  
+                    {wikiAnalytics && (  
+                      <div className="mb-3 p-3 bg-[var(--background)]/50 rounded-md border border-[var(--border-color)]">  
+                        <div className="text-xs font-medium text-[var(--foreground)] mb-2">Wiki Analysis</div>  
+                        <div className="text-xs text-[var(--muted)] space-y-1">  
+                          <div>Model: {wikiAnalytics.provider}/{wikiAnalytics.model}</div>  
+                          <div>Tokens: {wikiAnalytics.tokensReceived.toLocaleString()}</div>  
+                          <div>Time: {formatElapsedTime(wikiAnalytics.timeTaken)}</div>  
+                        </div>  
+                      </div>  
+                    )}  
+                      
+                    {/* Page Generation Stats */}  
+                    {Object.keys(pageAnalytics).length > 0 && (  
+                      <div className="p-3 bg-[var(--background)]/50 rounded-md border border-[var(--border-color)]">  
+                        <div className="text-xs font-medium text-[var(--foreground)] mb-2">  
+                          Pages Generated ({Object.keys(pageAnalytics).length})  
+                        </div>  
+                        <div className="max-h-32 overflow-y-auto space-y-2">  
+                          {Object.entries(pageAnalytics).map(([pageId, analytics]) => {  
+                            const page = wikiStructure?.pages.find(p => p.id === pageId);  
+                            return (  
+                              <div key={pageId} className="text-xs text-[var(--muted)]">  
+                                <div className="font-medium truncate">{page?.title || pageId}</div>  
+                                <div className="ml-2 space-y-0.5">  
+                                  <div>Model: {analytics.provider}/{analytics.model}</div>  
+                                  <div>Tokens: {analytics.tokensReceived.toLocaleString()}</div>  
+                                  <div>Time: {formatElapsedTime(analytics.timeTaken)}</div>  
+                                </div>  
+                              </div>  
+                            );  
+                          })}  
+                        </div>  
+                      </div>  
+                    )}  
+                  </>  
+                ) : (  
+                  <div className="p-3 bg-[var(--background)]/50 rounded-md border border-[var(--border-color)]">  
+                    <div className="text-xs text-[var(--muted)] text-center">  
+                      Analytics not available for this wiki  
+                    </div>  
+                  </div>  
+                )}  
+              </div>
+
               {/* Export buttons */}
               {Object.keys(generatedPages).length > 0 && (
                 <div className="mb-5">
@@ -2112,6 +2464,8 @@ IMPORTANT:
                 currentPageId={currentPageId}
                 onPageSelect={handlePageSelect}
                 messages={messages.repoPage}
+                onPageRefresh={refreshPage}  
+                pagesInProgress={pagesInProgress}
               />
             </div>
 
@@ -2119,11 +2473,20 @@ IMPORTANT:
             <div id="wiki-content" className="w-full flex-grow p-6 lg:p-8 overflow-y-auto">
               {currentPageId && generatedPages[currentPageId] ? (
                 <div className="max-w-[900px] xl:max-w-[1000px] mx-auto">
-                  <h3 className="text-xl font-bold text-[var(--foreground)] mb-4 break-words font-serif">
-                    {generatedPages[currentPageId].title}
-                  </h3>
-
-
+                  <div className="flex items-center justify-between mb-4">  
+                    <h3 className="text-xl font-bold text-[var(--foreground)] mb-4 break-words font-serif">
+                      {generatedPages[currentPageId].title}
+                    </h3>
+                    <button  
+                      onClick={() => refreshPage(currentPageId)}  
+                      disabled={pagesInProgress.has(currentPageId)}  
+                      className="flex items-center px-3 py-1.5 text-sm bg-[var(--background)] text-[var(--foreground)] rounded-md hover:bg-[var(--background)]/80 disabled:opacity-50 disabled:cursor-not-allowed border border-[var(--border-color)] transition-colors"  
+                      title="Refresh this page"  
+                    >  
+                      <FaSync className={`mr-2 ${pagesInProgress.has(currentPageId) ? 'animate-spin' : ''}`} />  
+                      Refresh Page  
+                    </button>
+                  </div>
 
                   <div className="prose prose-sm md:prose-base lg:prose-lg max-w-none">
                     <Markdown

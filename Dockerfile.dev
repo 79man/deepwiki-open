@@ -1,0 +1,104 @@
+# syntax=docker/dockerfile:1-labs  
+ARG BUILDPLATFORM=linux/amd64  
+ARG TARGETPLATFORM=linux/amd64  
+ARG CUSTOM_CERT_DIR="certs"  
+
+FROM node:20-alpine3.22 AS node_base  
+
+# Install dependencies for development  
+FROM node_base AS node_deps  
+WORKDIR /app  
+COPY package*.json ./  
+RUN npm ci  
+
+# Python dependencies stage  
+FROM python:3.11-slim AS py_deps  
+RUN python -m venv /opt/venv  
+ENV PATH="/opt/venv/bin:$PATH"  
+COPY api/requirements.txt /tmp/  
+RUN pip install --no-cache-dir -r /tmp/requirements.txt  
+
+# Final development image  
+FROM python:3.11-slim  
+
+# Set working directory  
+WORKDIR /app  
+
+# Install Node.js and npm  
+RUN apt-get update && apt-get install -y \  
+    curl \  
+    gnupg \  
+    git \  
+    ca-certificates \  
+    && mkdir -p /etc/apt/keyrings \  
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \  
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list \  
+    && apt-get update \  
+    && apt-get install -y nodejs \  
+    && apt-get clean \  
+    && rm -rf /var/lib/apt/lists/*  
+
+# Update certificates if custom ones were provided  
+ARG CUSTOM_CERT_DIR  
+RUN if [ -n "${CUSTOM_CERT_DIR}" ]; then \  
+    mkdir -p /usr/local/share/ca-certificates && \  
+    if [ -d "${CUSTOM_CERT_DIR}" ]; then \  
+    cp -r ${CUSTOM_CERT_DIR}/* /usr/local/share/ca-certificates/ 2>/dev/null || true; \  
+    update-ca-certificates; \  
+    echo "Custom certificates installed successfully."; \  
+    else \  
+    echo "Warning: ${CUSTOM_CERT_DIR} not found. Skipping certificate installation."; \  
+    fi \  
+    fi  
+
+ENV PATH="/opt/venv/bin:$PATH"  
+
+# Copy Python dependencies  
+COPY --from=py_deps /opt/venv /opt/venv  
+
+# Copy Node dependencies (but not the built app)  
+COPY --from=node_deps /app/node_modules ./node_modules  
+
+# Copy package.json and other config files  
+COPY package*.json ./  
+COPY next.config.ts ./  
+COPY tsconfig.json ./  
+COPY tailwind.config.js ./
+COPY postcss.config.mjs ./  
+
+# Expose the ports  
+EXPOSE ${PORT:-8001} 3000  
+
+# Create a development startup script  
+RUN echo '#!/bin/bash\n\  
+    # Load environment variables from .env file if it exists\n\  
+    if [ -f .env ]; then\n\  
+    export $(grep -v "^#" .env | xargs -r)\n\  
+    fi\n\  
+    \n\  
+    # Check for required environment variables (relaxed for dev)\n\  
+    if [ -z "$OLLAMA_HOST" ] && [ -z "$OPENAI_API_KEY" ] && [ -z "$GOOGLE_API_KEY" ]; then\n\  
+    echo "Warning: No AI provider configured. Set OLLAMA_HOST, OPENAI_API_KEY, or GOOGLE_API_KEY."\n\  
+    echo "For local development with Ollama, set OLLAMA_HOST in your .env file."\n\  
+    fi\n\  
+    \n\  
+    # Start the API server in development mode (with reload)\n\  
+    python -m api.main &\n\  
+    \n\  
+    # Start Next.js in development mode\n\  
+    npm run dev &\n\  
+    \n\  
+    # Wait for any process to exit\n\  
+    wait -n\n\  
+    exit $?' > /app/start.sh && chmod +x /app/start.sh  
+
+# Set development environment variables  
+ENV NODE_ENV=development  
+ENV PORT=8001  
+ENV SERVER_BASE_URL=http://localhost:${PORT:-8001}  
+
+# Create empty .env file (will be overridden if one exists at runtime)  
+RUN touch .env  
+
+# Command to run the application in development mode  
+CMD ["/app/start.sh"]

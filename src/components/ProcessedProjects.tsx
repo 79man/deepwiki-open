@@ -220,7 +220,7 @@ export default function ProcessedProjects({
                     </span>
                   </div>
                   <p className="text-xs text-[var(--muted)]">
-                    {t('processedOn')} {new Date(project.submittedAt).toLocaleDateString()}
+                    {t('processedOn')} {new Date(project.submittedAt).toLocaleDateString()} {new Date(project.submittedAt).toLocaleTimeString()}
                   </p>
                 </Link>
               </div>

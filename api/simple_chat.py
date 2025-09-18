@@ -4,7 +4,8 @@ from typing import List, Optional
 from urllib.parse import unquote
 
 import google.generativeai as genai
-from adalflow.components.model_client.ollama_client import OllamaClient
+# from adalflow.components.model_client.ollama_client import OllamaClient
+from .my_ollama_client import MyOllamaClient
 from adalflow.core.types import ModelType
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -76,6 +77,7 @@ class ChatCompletionRequest(BaseModel):
 async def chat_completions_stream(request: ChatCompletionRequest):
     """Stream a chat completion response directly using Google Generative AI"""
     try:
+        # logger.debug(f"{request}")
         # Check if request contains very large input
         input_too_large = False
         if request.messages and len(request.messages) > 0:
@@ -199,7 +201,7 @@ async def chat_completions_stream(request: ChatCompletionRequest):
                 # Try to perform RAG retrieval
                 try:
                     # This will use the actual RAG implementation
-                    retrieved_documents = request_rag(rag_query, language=request.language)
+                    rag_answer, retrieved_documents = request_rag(rag_query, language=request.language)
 
                     if retrieved_documents and retrieved_documents[0].documents:
                         # Format context for the prompt in a more structured way
@@ -227,7 +229,7 @@ async def chat_completions_stream(request: ChatCompletionRequest):
                         # Join all parts with clear separation
                         context_text = "\n\n" + "-" * 10 + "\n\n".join(context_parts)
                     else:
-                        logger.warning("No documents retrieved from RAG")
+                        logger.warning(f"No documents retrieved from RAG: {rag_answer}")
                 except Exception as e:
                     logger.error(f"Error in RAG retrieval: {str(e)}")
                     # Continue without RAG if there's an error
@@ -331,7 +333,7 @@ async def chat_completions_stream(request: ChatCompletionRequest):
         if request.provider == "ollama":
             prompt += " /no_think"
 
-            model = OllamaClient()
+            model = MyOllamaClient()
             model_kwargs = {
                 "model": model_config["model"],
                 "stream": True,
@@ -451,7 +453,17 @@ async def chat_completions_stream(request: ChatCompletionRequest):
                     response = await model.acall(api_kwargs=api_kwargs, model_type=ModelType.LLM)
                     # Handle streaming response from Ollama
                     async for chunk in response:
-                        text = getattr(chunk, 'response', None) or getattr(chunk, 'text', None) or str(chunk)
+                        logger.debug(f"Manoj: simple chat Ollama RCV CHUNK: {chunk}")
+                        # Extract text from Ollama's message structure  
+                        text = None  
+                        if hasattr(chunk, 'message') and hasattr(chunk.message, 'content'):  
+                            text = chunk.message.content  
+                        else:  
+                            text = getattr(chunk, 'response', None) or getattr(chunk, 'text', None) or str(chunk)  
+                        
+                        logger.debug(f"Manoj: simple chat Ollama RCV text: {text}")
+
+                        # text = getattr(chunk, 'response', None) or getattr(chunk, 'text', None) or getattr(chunk, 'text', None) or str(chunk)
                         if text and not text.startswith('model=') and not text.startswith('created_at='):
                             text = text.replace('<think>', '').replace('</think>', '')
                             yield text
