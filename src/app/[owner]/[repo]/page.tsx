@@ -408,6 +408,7 @@ export default function RepoWikiPage() {
       try {
         // Skip if content already exists
         if (!force ||generatedPages[page.id]?.content) {
+          console.log(page.id, "content already exists. Skiping...")
           resolve();
           return;
         }
@@ -1158,7 +1159,7 @@ IMPORTANT:
 
       // Add your debug line here:  
       // console.log('Full AI response:', responseText);  
-       // Clean up markdown delimiters
+      // Clean up markdown delimiters
       responseText = responseText.replace(/^```(?:xml)?\s*/i, '').replace(/```\s*$/i, '');
       
       // Extract wiki structure from response
@@ -1314,16 +1315,18 @@ IMPORTANT:
         rootSections
       };
 
+      // console.log("Generated wikiStructure", wikiStructure);
       setWikiStructure(wikiStructure);
       const timeTaken = Math.floor((Date.now() - structureStartTime) / 1000);  
       setWikiAnalytics({  
         model: selectedModelState || 'default',  
         provider: selectedProviderState || 'default',  
         tokensReceived: structureTokenCount,  
-        timeTaken  
+        timeTaken
       });
 
       setCurrentPageId(pages.length > 0 ? pages[0].id : undefined);
+      // console.log("Found Pages:", pages.length, "Setting Cur page: ", pages.length > 0 ? pages[0].id : undefined)
 
       // Start generating content for all pages with controlled concurrency
       if (pages.length > 0) {
@@ -1350,11 +1353,12 @@ IMPORTANT:
               console.log(`Starting page ${page.title} (${activeRequests} active, ${queue.length} remaining)`);
 
               // Start generating content for this page
-              generatePageContent(page, owner, repo)
+              generatePageContent(page, owner, repo, true)
                 .finally(() => {
                   // When done (success or error), decrement active count and process more
                   activeRequests--;
                   console.log(`Finished page ${page.title} (${activeRequests} active, ${queue.length} remaining)`);
+                  // console.log("Generated Page:", page)
 
                   // Check if all work is done (queue empty and no active requests)
                   if (queue.length === 0 && activeRequests === 0) {
