@@ -15,6 +15,8 @@ import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FaBitbucket, FaBookOpen, FaComments, FaDownload, FaExclamationTriangle, FaFileExport, FaFolder, FaGithub, FaGitlab, FaHome, FaSync, FaTimes } from 'react-icons/fa';
+import PromptEditorModal from '@/components/PromptEditorModal'; // Adjust import path if needed
+
 // Define the WikiSection and WikiStructure types directly in this file
 // since the imported types don't have the sections and rootSections properties
 interface WikiSection {
@@ -174,7 +176,6 @@ const createBitbucketHeaders = (bitbucketToken: string): HeadersInit => {
   return headers;
 };
 
-
 export default function RepoWikiPage() {
   // Get route parameters and search params
   const params = useParams();
@@ -240,6 +241,12 @@ export default function RepoWikiPage() {
   const [currentGeneratingPageId, setCurrentGeneratingPageId] = useState<string | null>(null);
   const [refreshPageIdQueued, setRefreshPageIdQueued] = useState(null);
   const [showWikiTypeInModal, setShowWikiTypeInModal] = useState(true);
+  const [showPromptModal, setShowPromptModal] = useState(false);
+  const [pendingPrompt, setPendingPrompt] = useState('');
+  const [pendingPageId, setPendingPageId] = useState<string | null>(null);
+  const [pendingPageRefreshParams, setPendingPageRefreshParams] = useState<ModelSelectionParams | null>(null);
+  const [enablePromptEditing, setEnablePromptEditing] = useState(true);
+
 
   // Analytics state  
   const [wikiAnalytics, setWikiAnalytics] = useState<{  
@@ -405,14 +412,150 @@ export default function RepoWikiPage() {
     return () => clearInterval(interval);  
   }, [pageStartTime, currentGeneratingPageId]);
 
+  const buildPageGenerationPrompt= (
+    page: WikiPage, 
+    params?: ModelSelectionParams
+  ) => {  
+    const filePaths = page.filePaths;
+    // Create the prompt content - simplified to avoid message dialogs
+    const promptContent =
+`You are an expert technical writer and software architect.
+Your task is to generate a comprehensive and accurate technical wiki page in Markdown format about a specific feature, system, or module within a given software project.
+
+You will be given:
+1. The "[WIKI_PAGE_TOPIC]" for the page you need to create.
+2. A list of "[RELEVANT_SOURCE_FILES]" from the project that you MUST use as the sole basis for the content. You have access to the full content of these files. You MUST use AT LEAST 5 relevant source files for comprehensive coverage - if fewer are provided, search for additional related files in the codebase.
+
+CRITICAL STARTING INSTRUCTION:
+The very first thing on the page MUST be a \`<details>\` block listing ALL the \`[RELEVANT_SOURCE_FILES]\` you used to generate the content. There MUST be AT LEAST 5 source files listed - if fewer were provided, you MUST find additional related files to include.
+Format it exactly like this:
+<details>
+<summary>Relevant source files</summary>
+
+Remember, do not provide any acknowledgements, disclaimers, apologies, or any other preface before the \`<details>\` block. JUST START with the \`<details>\` block.
+The following files were used as context for generating this wiki page:
+
+${filePaths.map(path => `- [${path}](${generateFileUrl(path)})`).join('\n')}
+<!-- Add additional relevant files if fewer than 5 were provided -->
+</details>
+
+Immediately after the \`<details>\` block, the main title of the page should be a H1 Markdown heading: \`# ${page.title}\`.
+
+Based ONLY on the content of the \`[RELEVANT_SOURCE_FILES]\`:
+
+1.  **Introduction:** Start with a concise introduction (1-2 paragraphs) explaining the purpose, scope, and high-level overview of "${page.title}" within the context of the overall project. If relevant, and if information is available in the provided files, link to other potential wiki pages using the format \`[Link Text](#page-anchor-or-id)\`.
+
+2.  **Detailed Sections:** Break down "${page.title}" into logical sections using H2 (\`##\`) and H3 (\`###\`) Markdown headings. For each section:
+    *   Explain the architecture, components, data flow, or logic relevant to the section's focus, as evidenced in the source files.
+    *   Identify key functions, classes, data structures, API endpoints, or configuration elements pertinent to that section.
+
+3. **Mermaid Diagrams with Validation:**  
+   * EXTENSIVELY use Mermaid diagrams (e.g., \`flowchart TD\`, \`sequenceDiagram\`, \`classDiagram\`, \`erDiagram\`, \`graph TD\`) to visually represent architectures, flows, relationships, and schemas found in the source files.  
+   * Before including any diagram, verify it follows these rules:  
+     - Use "graph TD" (top-down) directive ONLY  
+     - Node labels must be 3-4 words maximum  
+     - No special characters in node IDs (use alphanumeric only)  
+     - Proper arrow syntax: --> for connections  
+     - NO HTML comments or validation markers in diagram code  
+     - Avoid duplicate node definitions on the same line  
+     - Each node should be defined only once before being referenced  
+     - If diagram is complex, break into multiple simpler diagrams  
+     - Test syntax: each diagram must be parseable by Mermaid.js
+    *   Ensure diagrams are accurate and directly derived from information in the \`[RELEVANT_SOURCE_FILES]\`.
+    *   Provide a brief explanation before or after each diagram to give context.
+    *   CRITICAL: All diagrams MUST follow strict vertical orientation:
+       - Use "graph TD" (top-down) directive for flow diagrams
+       - NEVER use "graph LR" (left-right)
+       - Maximum node width should be 3-4 words
+       - For sequence diagrams:
+         - Start with "sequenceDiagram" directive on its own line
+         - Define ALL participants at the beginning
+         - Use descriptive but concise participant names
+         - Use the correct arrow types:
+           - ->> for request/asynchronous messages
+           - -->> for response messages
+           - -x for failed messages
+         - Include activation boxes using +/- notation
+         - Add notes for clarification using "Note over" or "Note right of"
+
+4.  **Tables:**
+    *   Use Markdown tables to summarize information such as:
+        *   Key features or components and their descriptions.
+        *   API endpoint parameters, types, and descriptions.
+        *   Configuration options, their types, and default values.
+        *   Data model fields, types, constraints, and descriptions.
+
+5.  **Code Snippets (ENTIRELY OPTIONAL):**
+    *   Include short, relevant code snippets (e.g., Python, Java, JavaScript, SQL, JSON, YAML) directly from the \`[RELEVANT_SOURCE_FILES]\` to illustrate key implementation details, data structures, or configurations.
+    *   Ensure snippets are well-formatted within Markdown code blocks with appropriate language identifiers.
+
+6.  **Source Citations (EXTREMELY IMPORTANT):**
+    *   For EVERY piece of significant information, explanation, diagram, table entry, or code snippet, you MUST cite the specific source file(s) and relevant line numbers from which the information was derived.
+    *   Place citations at the end of the paragraph, under the diagram/table, or after the code snippet.
+    *   Use the exact format: \`Sources: [filename.ext:start_line-end_line]()\` for a range, or \`Sources: [filename.ext:line_number]()\` for a single line. Multiple files can be cited: \`Sources: [file1.ext:1-10](), [file2.ext:5](), [dir/file3.ext]()\` (if the whole file is relevant and line numbers are not applicable or too broad).
+    *   If an entire section is overwhelmingly based on one or two files, you can cite them under the section heading in addition to more specific citations within the section.
+    *   IMPORTANT: You MUST cite AT LEAST 5 different source files throughout the wiki page to ensure comprehensive coverage.
+
+7.  **Technical Accuracy:** All information must be derived SOLELY from the \`[RELEVANT_SOURCE_FILES]\`. Do not infer, invent, or use external knowledge about similar systems or common practices unless it's directly supported by the provided code. If information is not present in the provided files, do not include it or explicitly state its absence if crucial to the topic.
+
+8.  **Clarity and Conciseness:** Use clear, professional, and concise technical language suitable for other developers working on or learning about the project. Avoid unnecessary jargon, but use correct technical terms where appropriate.
+
+9.  **Conclusion/Summary:** End with a brief summary paragraph if appropriate for "${page.title}", reiterating the key aspects covered and their significance within the project.
+
+IMPORTANT: Generate the content in ${language === 'en' ? 'English' :
+            language === 'ja' ? 'Japanese (日本語)' :
+            language === 'zh' ? 'Mandarin Chinese (中文)' :
+            language === 'zh-tw' ? 'Traditional Chinese (繁體中文)' :
+            language === 'es' ? 'Spanish (Español)' :
+            language === 'kr' ? 'Korean (한국어)' :
+            language === 'vi' ? 'Vietnamese (Tiếng Việt)' : 
+            language === "pt-br" ? "Brazilian Portuguese (Português Brasileiro)" :
+            language === "fr" ? "Français (French)" :
+            language === "ru" ? "Русский (Russian)" :
+            'English'} language.
+
+Remember:
+- Ground every claim in the provided source files.
+- Prioritize accuracy and direct representation of the code's functionality and structure.
+- Structure the document logically for easy understanding by other developers.
+`;
+    return promptContent;
+  }
+
+  const handleApplyPromptEdit = (editedPrompt: string) => {
+    setShowPromptModal(false);
+    // Now perform the backend call with user-edited prompt
+    if (pendingPageId && pendingPageRefreshParams) {
+      performPageRefresh(
+        pendingPageId,
+        pendingPageRefreshParams,
+        editedPrompt
+      )
+      // const page = wikiStructure?.pages.find(p => p.id === pendingPageId);
+      // if (page) {
+      //   generatePageContent(
+      //     page, 
+      //     effectiveRepoInfo.owner, 
+      //     effectiveRepoInfo.repo,
+      //     pendingPageRefreshParams,
+      //     editedPrompt,
+      //     true
+      //   );
+      // }
+    }
+    setPendingPageId(null);
+    setPendingPageRefreshParams(null);
+  };
+
   // Generate content for a wiki page
   const generatePageContent = useCallback(
     async (
       page: WikiPage, 
       owner: string, 
-      repo: string, 
+      repo: string,
       params?: ModelSelectionParams, 
-      force: boolean=false
+      promptOverride?: string,
+      force: boolean=false      
     ) => {
     return new Promise<void>(async (resolve) => {
       try {
@@ -447,7 +590,7 @@ export default function RepoWikiPage() {
         setPagesInProgress(prev => new Set(prev).add(page.id));
         // Don't set loading message for individual pages during queue processing
 
-        const filePaths = page.filePaths;
+        // const filePaths = page.filePaths;
 
         // Store the initially generated content BEFORE rendering/potential modification
         setGeneratedPages(prev => ({
@@ -461,7 +604,7 @@ export default function RepoWikiPage() {
 
         // Get repository URL
         const repoUrl = getRepoUrl(effectiveRepoInfo);
-
+/*
         // Create the prompt content - simplified to avoid message dialogs
  const promptContent =
 `You are an expert technical writer and software architect.
@@ -564,6 +707,8 @@ Remember:
 - Prioritize accuracy and direct representation of the code's functionality and structure.
 - Structure the document logically for easy understanding by other developers.
 `;
+*/
+        const promptContent = promptOverride ?? buildPageGenerationPrompt(page, params);
 
         // Prepare request body
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -777,9 +922,10 @@ Remember:
   const performPageRefresh = useCallback(
     async (
       pageId: string, 
-      params: ModelSelectionParams
+      params: ModelSelectionParams,
+      prompt: string
     ) => {
-      console.log(`refreshPage(${pageId}) called`);
+      console.log(`performPageRefresh(${pageId}) called`);
       const page = wikiStructure?.pages.find(p => p.id === pageId);  
       if (!page) return;
 
@@ -805,13 +951,14 @@ Remember:
       setIsLoading(true);  
       setLoadingMessage(`Refreshing ${page.title}...`);
 
-      try {  
+      try {
         // Regenerate the page content  
         await generatePageContent(
           page, 
           effectiveRepoInfo.owner, 
-          effectiveRepoInfo.repo,
+          effectiveRepoInfo.repo,          
           params,
+          prompt,
           true
         );  
       } finally {  
@@ -819,7 +966,41 @@ Remember:
         setLoadingMessage(undefined);  
       }    
     }, 
-    [wikiStructure, generatePageContent, effectiveRepoInfo]
+    [
+      wikiStructure, generatePageContent, effectiveRepoInfo, 
+      selectedProviderState, selectedModelState, enablePromptEditing
+    ]
+  );
+
+  const confirmPrompt = useCallback(
+    async (
+      pageId: string, 
+      params: ModelSelectionParams
+    ) => {
+      console.log(`refreshPage(${pageId}) called`);
+      const page = wikiStructure?.pages.find(p => p.id === pageId);  
+      if (!page) return;
+
+      // const provider = params?.provider ?? selectedProviderState;
+      // const model = params?.model ?? selectedModelState;
+      // ...populate others as needed
+      const prompt = buildPageGenerationPrompt(page, params);  
+
+      if (enablePromptEditing) {
+        // Show the modal for review/edit-- pause flow!
+        setPendingPrompt(prompt);
+        setPendingPageId(pageId);
+        setPendingPageRefreshParams(params);
+        setShowPromptModal(true);
+        return; // Pause here until modal submits
+      } else {
+        return performPageRefresh(pageId, params, prompt);
+      }          
+    }, 
+    [
+      wikiStructure, generatePageContent, effectiveRepoInfo, 
+      selectedProviderState, selectedModelState, enablePromptEditing
+    ]
   );
 
   async function analyzeRepository(fileTree: string, readme: string): Promise<{  
@@ -2016,19 +2197,19 @@ IMPORTANT:
 
   const handleModelSelectionApply = useCallback(
     async (params: ModelSelectionParams) => {
+      setIsModelSelectionModalOpen(false);
       if (refreshPageIdQueued) {
         // Perform a single Page Refresh
-        await performPageRefresh(refreshPageIdQueued, params);
+        await confirmPrompt(refreshPageIdQueued, params);
       }
       else
       {
         // Otherwise, do full repo refresh
         await confirmRefresh(params);
-      }
-      setIsModelSelectionModalOpen(false);
+      }      
       setRefreshPageIdQueued(null);
     }, 
-    [ refreshPageIdQueued, performPageRefresh, confirmRefresh]
+    [ refreshPageIdQueued, confirmPrompt, confirmRefresh]
   );
   // Start wiki generation when component mounts
   useEffect(() => {
@@ -2480,6 +2661,14 @@ IMPORTANT:
                 </button>
               </div>
 
+              {/* Prompt Editing Control */}
+              <button
+                className="px-3 py-1 rounded border text-sm bg-[var(--background)] border-[var(--border-color)] hover:bg-[var(--accent-primary)]/10"
+                onClick={() => setEnablePromptEditing(v => !v)}
+              >
+                {enablePromptEditing ? 'Disable' : 'Enable'} Prompt Editing
+              </button>
+
               {/* Analytics Section */}  
               <div className="mb-5">  
                 <h4 className="text-sm font-semibold text-[var(--foreground)] mb-3 font-serif">  
@@ -2723,6 +2912,12 @@ IMPORTANT:
         authCode={authCode}
         setAuthCode={setAuthCode}
         isAuthLoading={isAuthLoading}
+      />
+      <PromptEditorModal
+        isOpen={showPromptModal}
+        prompt={pendingPrompt}
+        onApply={handleApplyPromptEdit}
+        onCancel={() => setShowPromptModal(false)}
       />
     </div>
   );
