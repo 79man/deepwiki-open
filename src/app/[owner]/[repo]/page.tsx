@@ -4,6 +4,7 @@
 import Ask from '@/components/Ask';
 import Markdown from '@/components/Markdown';
 import ModelSelectionModal from '@/components/ModelSelectionModal';
+import { ModelSelectionParams } from '@/types/modelSelection';
 import ThemeToggle from '@/components/theme-toggle';
 import WikiTreeView from '@/components/WikiTreeView';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -237,6 +238,8 @@ export default function RepoWikiPage() {
   const [pageStartTime, setPageStartTime] = useState<number | null>(null);  
   const [pageElapsedTime, setPageElapsedTime] = useState(0);  
   const [currentGeneratingPageId, setCurrentGeneratingPageId] = useState<string | null>(null);
+  const [refreshPageIdQueued, setRefreshPageIdQueued] = useState(null);
+  const [showWikiTypeInModal, setShowWikiTypeInModal] = useState(true);
 
   // Analytics state  
   const [wikiAnalytics, setWikiAnalytics] = useState<{  
@@ -403,11 +406,18 @@ export default function RepoWikiPage() {
   }, [pageStartTime, currentGeneratingPageId]);
 
   // Generate content for a wiki page
-  const generatePageContent = useCallback(async (page: WikiPage, owner: string, repo: string, force: boolean=false) => {
+  const generatePageContent = useCallback(
+    async (
+      page: WikiPage, 
+      owner: string, 
+      repo: string, 
+      params?: ModelSelectionParams, 
+      force: boolean=false
+    ) => {
     return new Promise<void>(async (resolve) => {
       try {
         // Skip if content already exists
-        if (!force ||generatedPages[page.id]?.content) {
+        if (!force && generatedPages[page.id]?.content) {
           console.log(page.id, "content already exists. Skiping...")
           resolve();
           return;
@@ -566,12 +576,39 @@ Remember:
           }]
         };
 
+        const finalProvider = params?.provider ?? selectedProviderState;
+        const finalModel = params?.model ?? selectedModelState;
+        const finalIsCustomModel = params?.isCustomModel ?? isCustomSelectedModelState;
+        const finalCustomModel = params?.customModel ?? customSelectedModelState;
+        // const isComprehensiveView = params?.isComprehensiveView ?? isComprehensiveViewState;
+        const finalExcludedDirs = params?.excludedDirs ?? modelExcludedDirs;
+        const finalExcludedFiles = params?.excludedFiles ?? modelExcludedFiles;
+        const finalIncludedDirs = params?.includedDirs ?? modelIncludedDirs;
+        const finalIncludedFiles = params?.includedFiles ?? modelIncludedFiles;
+        const finalToken = params?.token ?? currentToken;
+        // const authCode = params?.authCode ?? authCodeState;
+        
         // Add tokens if available
-        addTokensToRequestBody(requestBody, currentToken, effectiveRepoInfo.type, selectedProviderState, selectedModelState, isCustomSelectedModelState, customSelectedModelState, language, modelExcludedDirs, modelExcludedFiles, modelIncludedDirs, modelIncludedFiles);
+        addTokensToRequestBody(
+          requestBody, 
+          finalToken, 
+          effectiveRepoInfo.type, 
+          finalProvider, 
+          finalModel, 
+          finalIsCustomModel, 
+          finalCustomModel, 
+          language, 
+          finalExcludedDirs, 
+          finalExcludedFiles, 
+          finalIncludedDirs, 
+          finalIncludedFiles
+        );
         setCurrentGeneratingPageId(page.id);  
         setPageStartTime(Date.now());  
         setPageTextReceivedCount(0);  
         setPageElapsedTime(0);  
+
+        //console.log(requestBody);
 
         // Use WebSocket for communication
         let content = '';
@@ -731,42 +768,59 @@ Remember:
     });
   }, [generatedPages, currentToken, effectiveRepoInfo, selectedProviderState, selectedModelState, isCustomSelectedModelState, customSelectedModelState, modelExcludedDirs, modelExcludedFiles, language, activeContentRequests, generateFileUrl]);
 
-  const refreshPage = useCallback(async (pageId: string) => {
-    console.log(`refreshPage(${pageId}) called`);  
-    const page = wikiStructure?.pages.find(p => p.id === pageId);  
-    if (!page) return;
+  const refreshPage = useCallback((pageId: string) => {
+    setShowWikiTypeInModal(false);
+    setRefreshPageIdQueued(pageId);
+    setIsModelSelectionModalOpen(true);
+  }, []);
 
-    // Clear any existing request tracking for this page  
-    activeContentRequests.delete(pageId); 
+  const performPageRefresh = useCallback(
+    async (
+      pageId: string, 
+      params: ModelSelectionParams
+    ) => {
+      console.log(`refreshPage(${pageId}) called`);
+      const page = wikiStructure?.pages.find(p => p.id === pageId);  
+      if (!page) return;
 
-    // Reset cache loaded flag to allow auto-save after refresh  
-    cacheLoadedSuccessfully.current = false;
+      // Clear any existing request tracking for this page  
+      activeContentRequests.delete(pageId); 
 
-    // Clear the existing content  
-    setGeneratedPages(prev => ({  
-      ...prev,  
-      [pageId]: { ...page, content: '' }  
-    }));  
-    
-    // Clear analytics for this page  
-    setPageAnalytics(prev => {  
-      const updated = { ...prev };  
-      delete updated[pageId];  
-      return updated;  
-    });
+      // Reset cache loaded flag to allow auto-save after refresh  
+      cacheLoadedSuccessfully.current = false;
 
-    setIsLoading(true);  
-    setLoadingMessage(`Refreshing ${page.title}...`);  
-    
+      // Clear the existing content  
+      setGeneratedPages(prev => ({  
+        ...prev,  
+        [pageId]: { ...page, content: '' }  
+      }));
+      
+      // Clear analytics for this page  
+      setPageAnalytics(prev => {  
+        const updated = { ...prev };  
+        delete updated[pageId];  
+        return updated;  
+      });
 
-    try {  
-      // Regenerate the page content  
-      await generatePageContent(page, effectiveRepoInfo.owner, effectiveRepoInfo.repo, true);  
-    } finally {  
-      setIsLoading(false);  
-      setLoadingMessage(undefined);  
-    }    
-  }, [wikiStructure, generatePageContent, effectiveRepoInfo]);
+      setIsLoading(true);  
+      setLoadingMessage(`Refreshing ${page.title}...`);
+
+      try {  
+        // Regenerate the page content  
+        await generatePageContent(
+          page, 
+          effectiveRepoInfo.owner, 
+          effectiveRepoInfo.repo,
+          params,
+          true
+        );  
+      } finally {  
+        setIsLoading(false);  
+        setLoadingMessage(undefined);  
+      }    
+    }, 
+    [wikiStructure, generatePageContent, effectiveRepoInfo]
+  );
 
   async function analyzeRepository(fileTree: string, readme: string): Promise<{  
     type: string;  
@@ -1045,7 +1099,8 @@ IMPORTANT:
 1. Create ${isComprehensiveView ? '8-12' : '4-6'} pages that would make a ${isComprehensiveView ? 'comprehensive' : 'concise'} wiki for this repository
 2. Each page should focus on a specific aspect of the codebase (e.g., architecture, key features, setup)
 3. The relevant_files should be actual files from the repository that would be used to generate that page
-4. Return ONLY valid XML with the structure specified above, with no markdown code block delimiters`
+4. Return ONLY valid XML with the structure specified above, with no markdown code block delimiters
+5. Ensure that there are no duplicate section ids and page ids`
         }]
       };
 
@@ -1353,7 +1408,7 @@ IMPORTANT:
               console.log(`Starting page ${page.title} (${activeRequests} active, ${queue.length} remaining)`);
 
               // Start generating content for this page
-              generatePageContent(page, owner, repo, true)
+              generatePageContent(page, owner, repo)
                 .finally(() => {
                   // When done (success or error), decrement active count and process more
                   activeRequests--;
@@ -1819,120 +1874,162 @@ IMPORTANT:
 
   // No longer needed as we use the modal directly
 
-  const confirmRefresh = useCallback(async (newToken?: string) => {
-    setShowModelOptions(false);
-    setLoadingMessage(messages.loading?.clearingCache || 'Clearing server cache...');
-    setIsLoading(true); // Show loading indicator immediately
+  const confirmRefresh = useCallback(
+    async (parameters: ModelSelectionParams) => {
 
-    try {
-      const params = new URLSearchParams({
-        owner: effectiveRepoInfo.owner,
-        repo: effectiveRepoInfo.repo,
-        repo_type: effectiveRepoInfo.type,
-        language: language,
-        provider: selectedProviderState,
-        model: selectedModelState,
-        is_custom_model: isCustomSelectedModelState.toString(),
-        custom_model: customSelectedModelState,
-        comprehensive: isComprehensiveView.toString(),
-        authorization_code: authCode,
-      });
+      const {
+        token
+      } = parameters
+      
+      setShowModelOptions(false);
+      setLoadingMessage(messages.loading?.clearingCache || 'Clearing server cache...');
+      setIsLoading(true); // Show loading indicator immediately
 
-      // Add file filters configuration
-      if (modelExcludedDirs) {
-        params.append('excluded_dirs', modelExcludedDirs);
-      }
-      if (modelExcludedFiles) {
-        params.append('excluded_files', modelExcludedFiles);
-      }
+      try {
+        const params = new URLSearchParams({
+          owner: effectiveRepoInfo.owner,
+          repo: effectiveRepoInfo.repo,
+          repo_type: effectiveRepoInfo.type,
+          language: language,
+          provider: selectedProviderState,
+          model: selectedModelState,
+          is_custom_model: isCustomSelectedModelState.toString(),
+          custom_model: customSelectedModelState,
+          comprehensive: isComprehensiveView.toString(),
+          authorization_code: authCode,
+        });
 
-      if(authRequired && !authCode) {
-        setIsLoading(false);
-        console.error("Authorization code is required");
-        setError('Authorization code is required');
-        return;
-      }
-
-      const response = await fetch(`/api/wiki_cache?${params.toString()}`, {
-        method: 'DELETE',
-        headers: {
-          'Accept': 'application/json',
+        // Add file filters configuration
+        if (modelExcludedDirs) {
+          params.append('excluded_dirs', modelExcludedDirs);
         }
-      });
+        if (modelExcludedFiles) {
+          params.append('excluded_files', modelExcludedFiles);
+        }
 
-      if (response.ok) {
-        console.log('Server-side wiki cache cleared successfully.');
-        // Optionally, show a success message for cache clearing if desired
-        // setLoadingMessage('Cache cleared. Refreshing wiki...');
-      } else {
-        const errorText = await response.text();
-        console.warn(`Failed to clear server-side wiki cache (status: ${response.status}): ${errorText}. Proceeding with refresh anyway.`);
-        // Optionally, inform the user about the cache clear failure but that refresh will still attempt
-        // setError(\`Cache clear failed: ${errorText}. Trying to refresh...\`);
-        if(response.status == 401) {
+        if(authRequired && !authCode) {
           setIsLoading(false);
-          setLoadingMessage(undefined);
-          setError('Failed to validate the authorization code');
-          console.error('Failed to validate the authorization code')
+          console.error("Authorization code is required");
+          setError('Authorization code is required');
           return;
         }
+
+        const response = await fetch(`/api/wiki_cache?${params.toString()}`, {
+          method: 'DELETE',
+          headers: {
+            'Accept': 'application/json',
+          }
+        });
+
+        if (response.ok) {
+          console.log('Server-side wiki cache cleared successfully.');
+          // Optionally, show a success message for cache clearing if desired
+          // setLoadingMessage('Cache cleared. Refreshing wiki...');
+        } else {
+          const errorText = await response.text();
+          console.warn(`Failed to clear server-side wiki cache (status: ${response.status}): ${errorText}. Proceeding with refresh anyway.`);
+          // Optionally, inform the user about the cache clear failure but that refresh will still attempt
+          // setError(\`Cache clear failed: ${errorText}. Trying to refresh...\`);
+          if(response.status == 401) {
+            setIsLoading(false);
+            setLoadingMessage(undefined);
+            setError('Failed to validate the authorization code');
+            console.error('Failed to validate the authorization code')
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Error calling DELETE /api/wiki_cache:', err);
+        setIsLoading(false);
+        setEmbeddingError(false); // Reset embedding error state
+        // Optionally, inform the user about the cache clear error
+        // setError(\`Error clearing cache: ${err instanceof Error ? err.message : String(err)}. Trying to refresh...\`);
+        throw err;
       }
-    } catch (err) {
-      console.warn('Error calling DELETE /api/wiki_cache:', err);
-      setIsLoading(false);
+
+      // Update token if provided
+      if (token) {
+        // Update current token state
+        setCurrentToken(token);
+        // Update the URL parameters to include the new token
+        const currentUrl = new URL(window.location.href);
+        currentUrl.searchParams.set('token', token);
+        window.history.replaceState({}, '', currentUrl.toString());
+      }
+
+      // Proceed with the rest of the refresh logic
+      console.log('Refreshing wiki. Server cache will be overwritten upon new generation if not cleared.');
+
+      // Clear the localStorage cache (if any remnants or if it was used before this change)
+      const localStorageCacheKey = getCacheKey(effectiveRepoInfo.owner, effectiveRepoInfo.repo, effectiveRepoInfo.type, language, isComprehensiveView);
+      localStorage.removeItem(localStorageCacheKey);
+
+      // Reset cache loaded flag
+      cacheLoadedSuccessfully.current = false;
+      effectRan.current = false; // Allow the main data loading useEffect to run again
+
+      // Reset all state
+      setWikiStructure(undefined);
+      setCurrentPageId(undefined);
+      setGeneratedPages({});
+      setPagesInProgress(new Set());
+      setError(null);
       setEmbeddingError(false); // Reset embedding error state
-      // Optionally, inform the user about the cache clear error
-      // setError(\`Error clearing cache: ${err instanceof Error ? err.message : String(err)}. Trying to refresh...\`);
-      throw err;
-    }
+      setIsLoading(true); // Set loading state for refresh
+      setLoadingMessage(messages.loading?.initializing || 'Initializing wiki generation...');
 
-    // Update token if provided
-    if (newToken) {
-      // Update current token state
-      setCurrentToken(newToken);
-      // Update the URL parameters to include the new token
-      const currentUrl = new URL(window.location.href);
-      currentUrl.searchParams.set('token', newToken);
-      window.history.replaceState({}, '', currentUrl.toString());
-    }
+      // Clear any in-progress requests for page content
+      activeContentRequests.clear();
+      // Reset flags related to request processing if they are component-wide
+      setStructureRequestInProgress(false); // Assuming this flag should be reset
+      setRequestInProgress(false); // Assuming this flag should be reset
 
-    // Proceed with the rest of the refresh logic
-    console.log('Refreshing wiki. Server cache will be overwritten upon new generation if not cleared.');
+      // Explicitly trigger the data loading process again by re-invoking what the main useEffect does.
+      // This will first attempt to load from (now hopefully non-existent or soon-to-be-overwritten) server cache,
+      // then proceed to fetchRepositoryStructure if needed.
+      // To ensure fetchRepositoryStructure is called if cache is somehow still there or to force a full refresh:
+      // One option is to directly call fetchRepositoryStructure() if force refresh means bypassing cache check.
+      // For now, we rely on the standard loadData flow initiated by resetting effectRan and dependencies.
+      // This will re-trigger the main data loading useEffect.
+      // No direct call to fetchRepositoryStructure here, let the useEffect handle it based on effectRan.current = false.
+    }, [
+    effectiveRepoInfo, 
+    language, 
+    messages.loading, 
+    activeContentRequests, 
+    selectedProviderState, 
+    selectedModelState, 
+    isCustomSelectedModelState, 
+    customSelectedModelState, 
+    modelExcludedDirs, 
+    modelExcludedFiles, 
+    isComprehensiveView, 
+    authCode, 
+    authRequired
+  ]);
 
-    // Clear the localStorage cache (if any remnants or if it was used before this change)
-    const localStorageCacheKey = getCacheKey(effectiveRepoInfo.owner, effectiveRepoInfo.repo, effectiveRepoInfo.type, language, isComprehensiveView);
-    localStorage.removeItem(localStorageCacheKey);
+  const handleRefreshWiki = () => {
+    setShowWikiTypeInModal(true);
+    setIsModelSelectionModalOpen(true);
+    setRefreshPageIdQueued(null);
+  };
 
-    // Reset cache loaded flag
-    cacheLoadedSuccessfully.current = false;
-    effectRan.current = false; // Allow the main data loading useEffect to run again
-
-    // Reset all state
-    setWikiStructure(undefined);
-    setCurrentPageId(undefined);
-    setGeneratedPages({});
-    setPagesInProgress(new Set());
-    setError(null);
-    setEmbeddingError(false); // Reset embedding error state
-    setIsLoading(true); // Set loading state for refresh
-    setLoadingMessage(messages.loading?.initializing || 'Initializing wiki generation...');
-
-    // Clear any in-progress requests for page content
-    activeContentRequests.clear();
-    // Reset flags related to request processing if they are component-wide
-    setStructureRequestInProgress(false); // Assuming this flag should be reset
-    setRequestInProgress(false); // Assuming this flag should be reset
-
-    // Explicitly trigger the data loading process again by re-invoking what the main useEffect does.
-    // This will first attempt to load from (now hopefully non-existent or soon-to-be-overwritten) server cache,
-    // then proceed to fetchRepositoryStructure if needed.
-    // To ensure fetchRepositoryStructure is called if cache is somehow still there or to force a full refresh:
-    // One option is to directly call fetchRepositoryStructure() if force refresh means bypassing cache check.
-    // For now, we rely on the standard loadData flow initiated by resetting effectRan and dependencies.
-    // This will re-trigger the main data loading useEffect.
-    // No direct call to fetchRepositoryStructure here, let the useEffect handle it based on effectRan.current = false.
-  }, [effectiveRepoInfo, language, messages.loading, activeContentRequests, selectedProviderState, selectedModelState, isCustomSelectedModelState, customSelectedModelState, modelExcludedDirs, modelExcludedFiles, isComprehensiveView, authCode, authRequired]);
-
+  const handleModelSelectionApply = useCallback(
+    async (params: ModelSelectionParams) => {
+      if (refreshPageIdQueued) {
+        // Perform a single Page Refresh
+        await performPageRefresh(refreshPageIdQueued, params);
+      }
+      else
+      {
+        // Otherwise, do full repo refresh
+        await confirmRefresh(params);
+      }
+      setIsModelSelectionModalOpen(false);
+      setRefreshPageIdQueued(null);
+    }, 
+    [ refreshPageIdQueued, performPageRefresh, confirmRefresh]
+  );
   // Start wiki generation when component mounts
   useEffect(() => {
     if (effectRan.current === false) {
@@ -1950,158 +2047,156 @@ IMPORTANT:
             comprehensive: isComprehensiveView.toString(),
           });
           const response = await fetch(`/api/wiki_cache?${params.toString()}`);
+          if (!response.ok) 
+            throw new Error(`Server error: ${response.status} - ${await response.text()}`);
 
-          if (response.ok) {
-            const cachedData = await response.json(); // Returns null if no cache
-            if (cachedData && cachedData.wiki_structure && cachedData.generated_pages && Object.keys(cachedData.generated_pages).length > 0) {
-              console.log('Using server-cached wiki data');
-              if(cachedData.model) {
-                setSelectedModelState(cachedData.model);
-              }
-              if(cachedData.provider) {
-                setSelectedProviderState(cachedData.provider);
-              }
+          const cachedData = await response.json(); // Returns null if no cache
+          if (
+            cachedData && 
+            cachedData.wiki_structure && 
+            cachedData.generated_pages && 
+            Object.keys(cachedData.generated_pages).length > 0
+          ) {
+            // Model/provider/repo updates...
+            console.log('Using server-cached wiki data');
+            if (cachedData.model) setSelectedModelState(cachedData.model);
+            if (cachedData.provider) setSelectedProviderState(cachedData.provider);
+            if (cachedData.repo) setEffectiveRepoInfo(cachedData.repo);
+            else if (cachedData.repo_url && !effectiveRepoInfo.repoUrl)
+              setEffectiveRepoInfo({ ...effectiveRepoInfo, repoUrl: cachedData.repo_url });
 
-              // Update repoInfo
-              if(cachedData.repo) {
-                setEffectiveRepoInfo(cachedData.repo);
-              } else if (cachedData.repo_url && !effectiveRepoInfo.repoUrl) {
-                const updatedRepoInfo = { ...effectiveRepoInfo, repoUrl: cachedData.repo_url };
-                setEffectiveRepoInfo(updatedRepoInfo); // Update effective repo info state
-                console.log('Using cached repo_url:', cachedData.repo_url);
-              }
+            // Ensure the cached structure has sections and rootSections
+            const cachedStructure = {
+              ...cachedData.wiki_structure,
+              sections: cachedData.wiki_structure.sections || [],
+              rootSections: cachedData.wiki_structure.rootSections || [],
+              pages: Array.isArray(cachedData.wiki_structure.pages) ? cachedData.wiki_structure.pages : [],
+            };
 
-              // Ensure the cached structure has sections and rootSections
-              const cachedStructure = {
-                ...cachedData.wiki_structure,
-                sections: cachedData.wiki_structure.sections || [],
-                rootSections: cachedData.wiki_structure.rootSections || []
-              };
+            // If sections or rootSections are missing, create intelligent ones based on page titles
+            if (!cachedStructure.sections.length || !cachedStructure.rootSections.length) {
+              const pages = cachedStructure.pages;              
+              const sections: WikiSection[] = [];
+              const rootSections: string[] = [];
 
-              // If sections or rootSections are missing, create intelligent ones based on page titles
-              if (!cachedStructure.sections.length || !cachedStructure.rootSections.length) {
-                const pages = cachedStructure.pages;
-                const sections: WikiSection[] = [];
-                const rootSections: string[] = [];
+              // Group pages by common prefixes or categories
+              const pageClusters = new Map<string, WikiPage[]>();
 
-                // Group pages by common prefixes or categories
-                const pageClusters = new Map<string, WikiPage[]>();
+              // Define common categories that might appear in page titles
+              const categories = [
+                { id: 'overview', title: 'Overview', keywords: ['overview', 'introduction', 'about'] },
+                { id: 'architecture', title: 'Architecture', keywords: ['architecture', 'structure', 'design', 'system'] },
+                { id: 'features', title: 'Core Features', keywords: ['feature', 'functionality', 'core'] },
+                { id: 'components', title: 'Components', keywords: ['component', 'module', 'widget'] },
+                { id: 'api', title: 'API', keywords: ['api', 'endpoint', 'service', 'server'] },
+                { id: 'data', title: 'Data Flow', keywords: ['data', 'flow', 'pipeline', 'storage'] },
+                { id: 'models', title: 'Models', keywords: ['model', 'ai', 'ml', 'integration'] },
+                { id: 'ui', title: 'User Interface', keywords: ['ui', 'interface', 'frontend', 'page'] },
+                { id: 'setup', title: 'Setup & Configuration', keywords: ['setup', 'config', 'installation', 'deploy'] }
+              ];
 
-                // Define common categories that might appear in page titles
-                const categories = [
-                  { id: 'overview', title: 'Overview', keywords: ['overview', 'introduction', 'about'] },
-                  { id: 'architecture', title: 'Architecture', keywords: ['architecture', 'structure', 'design', 'system'] },
-                  { id: 'features', title: 'Core Features', keywords: ['feature', 'functionality', 'core'] },
-                  { id: 'components', title: 'Components', keywords: ['component', 'module', 'widget'] },
-                  { id: 'api', title: 'API', keywords: ['api', 'endpoint', 'service', 'server'] },
-                  { id: 'data', title: 'Data Flow', keywords: ['data', 'flow', 'pipeline', 'storage'] },
-                  { id: 'models', title: 'Models', keywords: ['model', 'ai', 'ml', 'integration'] },
-                  { id: 'ui', title: 'User Interface', keywords: ['ui', 'interface', 'frontend', 'page'] },
-                  { id: 'setup', title: 'Setup & Configuration', keywords: ['setup', 'config', 'installation', 'deploy'] }
-                ];
+              // Initialize clusters with empty arrays
+              categories.forEach(category => {
+                pageClusters.set(category.id, []);
+              });
 
-                // Initialize clusters with empty arrays
-                categories.forEach(category => {
-                  pageClusters.set(category.id, []);
-                });
+              // Add an "Other" category for pages that don't match any category
+              pageClusters.set('other', []);
 
-                // Add an "Other" category for pages that don't match any category
-                pageClusters.set('other', []);
+              // Assign pages to categories based on title keywords
+              pages.forEach((page: WikiPage) => {
+                const title = page.title.toLowerCase();
+                let assigned = false;
 
-                // Assign pages to categories based on title keywords
-                pages.forEach((page: WikiPage) => {
-                  const title = page.title.toLowerCase();
-                  let assigned = false;
-
-                  // Try to find a matching category
-                  for (const category of categories) {
-                    if (category.keywords.some(keyword => title.includes(keyword))) {
-                      pageClusters.get(category.id)?.push(page);
-                      assigned = true;
-                      break;
-                    }
-                  }
-
-                  // If no category matched, put in "Other"
-                  if (!assigned) {
-                    pageClusters.get('other')?.push(page);
-                  }
-                });
-
-                // Create sections for non-empty categories
-                for (const [categoryId, categoryPages] of pageClusters.entries()) {
-                  if (categoryPages.length > 0) {
-                    const category = categories.find(c => c.id === categoryId) ||
-                                    { id: categoryId, title: categoryId === 'other' ? 'Other' : categoryId.charAt(0).toUpperCase() + categoryId.slice(1) };
-
-                    const sectionId = `section-${categoryId}`;
-                    sections.push({
-                      id: sectionId,
-                      title: category.title,
-                      pages: categoryPages.map((p: WikiPage) => p.id)
-                    });
-                    rootSections.push(sectionId);
-
-                    // Update page parentId
-                    categoryPages.forEach((page: WikiPage) => {
-                      page.parentId = sectionId;
-                    });
+                // Try to find a matching category
+                for (const category of categories) {
+                  if (category.keywords.some(keyword => title.includes(keyword))) {
+                    pageClusters.get(category.id)?.push(page);
+                    assigned = true;
+                    break;
                   }
                 }
 
-                // If we still have no sections (unlikely), fall back to importance-based grouping
-                if (sections.length === 0) {
-                  const highImportancePages = pages.filter((p: WikiPage) => p.importance === 'high').map((p: WikiPage) => p.id);
-                  const mediumImportancePages = pages.filter((p: WikiPage) => p.importance === 'medium').map((p: WikiPage) => p.id);
-                  const lowImportancePages = pages.filter((p: WikiPage) => p.importance === 'low').map((p: WikiPage) => p.id);
-
-                  if (highImportancePages.length > 0) {
-                    sections.push({
-                      id: 'section-high',
-                      title: 'Core Components',
-                      pages: highImportancePages
-                    });
-                    rootSections.push('section-high');
-                  }
-
-                  if (mediumImportancePages.length > 0) {
-                    sections.push({
-                      id: 'section-medium',
-                      title: 'Key Features',
-                      pages: mediumImportancePages
-                    });
-                    rootSections.push('section-medium');
-                  }
-
-                  if (lowImportancePages.length > 0) {
-                    sections.push({
-                      id: 'section-low',
-                      title: 'Additional Information',
-                      pages: lowImportancePages
-                    });
-                    rootSections.push('section-low');
-                  }
+                // If no category matched, put in "Other"
+                if (!assigned) {
+                  pageClusters.get('other')?.push(page);
                 }
+              });
 
-                cachedStructure.sections = sections;
-                cachedStructure.rootSections = rootSections;
+              // Create sections for non-empty categories
+              for (const [categoryId, categoryPages] of pageClusters.entries()) {
+                if (categoryPages.length > 0) {
+                  const category = categories.find(c => c.id === categoryId) ||
+                                  { id: categoryId, title: categoryId === 'other' ? 'Other' : categoryId.charAt(0).toUpperCase() + categoryId.slice(1) };
+
+                  const sectionId = `section-${categoryId}`;
+                  sections.push({
+                    id: sectionId,
+                    title: category.title,
+                    pages: categoryPages.map((p: WikiPage) => p.id)
+                  });
+                  rootSections.push(sectionId);
+
+                  // Update page parentId
+                  categoryPages.forEach((page: WikiPage) => {
+                    page.parentId = sectionId;
+                  });
+                }
               }
 
-              setWikiStructure(cachedStructure);
-              setGeneratedPages(cachedData.generated_pages);
-              setCurrentPageId(cachedStructure.pages.length > 0 ? cachedStructure.pages[0].id : undefined);
-              setIsLoading(false);
-              setEmbeddingError(false); 
-              setLoadingMessage(undefined);
-              cacheLoadedSuccessfully.current = true;
-              return; // Exit if cache is successfully loaded
-            } else {
-              console.log('No valid wiki data in server cache or cache is empty.');
+              // If we still have no sections (unlikely), fall back to importance-based grouping
+              if (sections.length === 0) {
+                const highImportancePages = pages.filter((p: WikiPage) => p.importance === 'high').map((p: WikiPage) => p.id);
+                const mediumImportancePages = pages.filter((p: WikiPage) => p.importance === 'medium').map((p: WikiPage) => p.id);
+                const lowImportancePages = pages.filter((p: WikiPage) => p.importance === 'low').map((p: WikiPage) => p.id);
+
+                if (highImportancePages.length > 0) {
+                  sections.push({
+                    id: 'section-high',
+                    title: 'Core Components',
+                    pages: highImportancePages
+                  });
+                  rootSections.push('section-high');
+                }
+
+                if (mediumImportancePages.length > 0) {
+                  sections.push({
+                    id: 'section-medium',
+                    title: 'Key Features',
+                    pages: mediumImportancePages
+                  });
+                  rootSections.push('section-medium');
+                }
+
+                if (lowImportancePages.length > 0) {
+                  sections.push({
+                    id: 'section-low',
+                    title: 'Additional Information',
+                    pages: lowImportancePages
+                  });
+                  rootSections.push('section-low');
+                }
+              }
+
+              cachedStructure.sections = sections;
+              cachedStructure.rootSections = rootSections;
             }
+
+            setWikiStructure(cachedStructure);
+            setGeneratedPages(cachedData.generated_pages);
+            setCurrentPageId(cachedStructure.pages.length > 0 ? cachedStructure.pages[0].id : undefined);
+            if (cachedData.wiki_analytics) setWikiAnalytics(cachedData.wiki_analytics)
+            if (cachedData.page_analytics) setPageAnalytics(cachedData.page_analytics)
+
+            setIsLoading(false);
+            setEmbeddingError(false); 
+            setLoadingMessage(undefined);
+            cacheLoadedSuccessfully.current = true;
+            return; // Exit if cache is successfully loaded
           } else {
-            // Log error but proceed to fetch structure, as cache is optional
-            console.error('Error fetching wiki cache from server:', response.status, await response.text());
+            console.log('No valid wiki data in server cache or cache is empty.');
           }
+          
         } catch (error) {
           console.error('Error loading from server cache:', error);
           // Proceed to fetch structure if cache loading fails
@@ -2224,7 +2319,7 @@ IMPORTANT:
                 <div className="w-3 h-3 bg-[var(--accent-primary)]/70 rounded-full animate-pulse delay-150"></div>
               </div>
             </div>
-            <div className="text-[var(--foreground)] text-center mb-3 font-serif">
+            <div className="text-[var(--foreground)] text-center font-serif">
               {loadingMessage || messages.common?.loading || 'Loading...'}              
               {isExporting && (messages.loading?.preparingDownload || ' Please wait while we prepare your download...')}
               
@@ -2244,10 +2339,44 @@ IMPORTANT:
                   <div>Time elapsed: {formatElapsedTime(pageElapsedTime)}</div>  
                 </div>  
               )}
-            </div>
+            </div>            
             {/* Progress bar for page generation */}
             {wikiStructure && (
-              <div className="w-full max-w-md mt-3">
+              <div className="w-full max-w-md">
+                <div style={{ marginBottom: "1em" }} className="mt-4 text-xs">
+                  <p className="text-[var(--muted)] mb-2">Page Status:</p>
+                  <ul className="text-[var(--foreground)] space-y-1">
+                    {wikiStructure.pages.map(page => {
+                      let emoji = "";
+                      let pageNameClass = "";
+                      if (generatedPages[page.id]?.content && generatedPages[page.id].content !== "Loading...") {
+                        emoji = "✅"; // Completed
+                      } else if (page.id === currentGeneratingPageId) {
+                        emoji = (
+                          <span
+                            className="inline-block w-3.5 h-3.5 rounded-full bg-blue-500 animate-pulse"
+                            style={{ verticalAlign: "middle" }}
+                          ></span>
+                        );
+                        pageNameClass = "font-medium animate-pulse truncate";
+                      } else if (pagesInProgress.has(page.id)) {
+                        emoji = "🕑"; // Pending/In Progress
+                      } else {
+                        emoji = "🕑"; // Treat as pending if status unclear
+                      }
+                      return (
+                        <li key={page.id}
+                            className="flex justify-between items-center gap-2 py-0.5 text-[var(--foreground)]"
+                            style={{ fontSize: "1.05em" }}
+                        >
+                          <span className={pageNameClass}>{page.title}</span>
+                          <span className="ml-3 min-w-[1.5em] flex-shrink-0 flex justify-end items-center">{emoji}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+
                 <div className="bg-[var(--background)]/50 rounded-full h-2 mb-3 overflow-hidden border border-[var(--border-color)]">
                   <div
                     className="bg-[var(--accent-primary)] h-2 rounded-full transition-all duration-300 ease-in-out"
@@ -2265,30 +2394,6 @@ IMPORTANT:
                             .replace('{total}', wikiStructure.pages.length.toString())
                         : `${wikiStructure.pages.length - pagesInProgress.size} of ${wikiStructure.pages.length} pages completed`}
                 </p>
-
-                {/* Show list of in-progress pages */}
-                {pagesInProgress.size > 0 && (
-                  <div className="mt-4 text-xs">
-                    <p className="text-[var(--muted)] mb-2">
-                      {messages.repoPage?.currentlyProcessing || 'Currently processing:'}
-                    </p>
-                    <ul className="text-[var(--foreground)] space-y-1">
-                      {Array.from(pagesInProgress).slice(0, 3).map(pageId => {
-                        const page = wikiStructure.pages.find(p => p.id === pageId);
-                        return page ? <li key={pageId} className="truncate border-l-2 border-[var(--accent-primary)]/30 pl-2">{page.title}</li> : null;
-                      })}
-                      {pagesInProgress.size > 3 && (
-                        <li className="text-[var(--muted)]">
-                          {language === 'ja'
-                            ? `...他に${pagesInProgress.size - 3}ページ`
-                            : messages.repoPage?.andMorePages
-                                ? messages.repoPage.andMorePages.replace('{count}', (pagesInProgress.size - 3).toString())
-                                : `...and ${pagesInProgress.size - 3} more`}
-                        </li>
-                      )}
-                    </ul>
-                  </div>
-                )}
               </div>
             )}
           </div>
@@ -2366,7 +2471,7 @@ IMPORTANT:
               {/* Refresh Wiki button */}
               <div className="mb-5">
                 <button
-                  onClick={() => setIsModelSelectionModalOpen(true)}
+                  onClick={() => handleRefreshWiki()}
                   disabled={isLoading}
                   className="flex items-center w-full text-xs px-3 py-2 bg-[var(--background)] text-[var(--foreground)] rounded-md hover:bg-[var(--background)]/80 disabled:opacity-50 disabled:cursor-not-allowed border border-[var(--border-color)] transition-colors hover:cursor-pointer"
                 >
@@ -2607,8 +2712,11 @@ IMPORTANT:
         setIncludedDirs={setModelIncludedDirs}
         includedFiles={modelIncludedFiles}
         setIncludedFiles={setModelIncludedFiles}
-        onApply={confirmRefresh}
-        showWikiType={true}
+        onApply={handleModelSelectionApply}
+        // onApply={(params) => {
+        //   console.log('Model selection applied:', params);
+        // }}
+        showWikiType={showWikiTypeInModal}
         showTokenInput={effectiveRepoInfo.type !== 'local' && !currentToken} // Show token input if not local and no current token
         repositoryType={effectiveRepoInfo.type as 'github' | 'gitlab' | 'bitbucket'}
         authRequired={authRequired}
