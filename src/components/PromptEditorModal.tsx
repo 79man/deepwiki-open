@@ -43,6 +43,9 @@ const PromptEditorModal: React.FC<PromptEditorModalProps> = ({
             className="text-lg font-semibold text-[var(--accent-primary)]"
           >
             Edit Generation Prompt
+            <span className="text-xs font-normal ml-3 text-[var(--muted)] bg-[var(--background)] px-2 py-1 rounded border border-[var(--border-color)]/50">
+              {editedPrompt.length} chars
+            </span>
           </h2>
           <button
             aria-label="Close editor"
