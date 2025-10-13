@@ -16,6 +16,9 @@ import { useParams, useSearchParams } from 'next/navigation';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FaBitbucket, FaBookOpen, FaComments, FaDownload, FaExclamationTriangle, FaFileExport, FaFolder, FaGithub, FaGitlab, FaHome, FaSync, FaTimes } from 'react-icons/fa';
 import PromptEditorModal from '@/components/PromptEditorModal'; // Adjust import path if needed
+import { usePromptLog } from '@/contexts/PromptLogContext';
+import PromptLogFloatingPanel from "@/components/PromptLogFloatingPanel";
+
 
 // Define the WikiSection and WikiStructure types directly in this file
 // since the imported types don't have the sections and rootSections properties
@@ -180,6 +183,7 @@ export default function RepoWikiPage() {
   // Get route parameters and search params
   const params = useParams();
   const searchParams = useSearchParams();
+  const { addPromptLog } = usePromptLog();
 
   // Extract owner and repo from route params
   const owner = params.owner as string;
@@ -256,7 +260,7 @@ export default function RepoWikiPage() {
 
   // const [pendingPrompt, setPendingPrompt] = useState('');
   const [pendingPageId, setPendingPageId] = useState<string | null>(null);
-  
+
   // Analytics state  
   const [wikiAnalytics, setWikiAnalytics] = useState<{  
     model: string;  
@@ -843,6 +847,13 @@ Remember:
             // Handle WebSocket close
             ws.onclose = () => {
               console.log(`WebSocket connection closed for page: ${page.title}`);
+              addPromptLog({
+                source: 'PageContent',
+                prompt: requestBody.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
+                response: content, // variable holding the generated page markdown
+                timestamp: Date.now(),
+              });
+
               resolve();
             };
 
@@ -892,6 +903,13 @@ Remember:
             throw new Error('Error processing response stream');
           }
         }
+
+        addPromptLog({
+          source: 'PageContent',
+          prompt: requestBody.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
+          response: content, // variable holding the generated page markdown
+          timestamp: Date.now(),
+        });
 
         // Clean up markdown delimiters
         content = content.replace(/^```markdown\s*/i, '').replace(/```\s*$/i, '');
@@ -1480,6 +1498,13 @@ Remember:
 
       // console.log("Generated wikiStructure", wikiStructure);
       setWikiStructure(wikiStructure);
+      addPromptLog({
+        source: 'WikiStructure',
+        prompt: requestBody.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
+        response: responseText,
+        timestamp: Date.now(),
+      });
+
       const timeTaken = Math.floor((Date.now() - structureStartTime) / 1000);  
       setWikiAnalytics({  
         model: selectedModelState || 'default',  
@@ -2868,6 +2893,7 @@ Remember:
           setOnPromptConfirm(null);
         }}
       />
+      <PromptLogFloatingPanel/>
     </div>
   );
 }

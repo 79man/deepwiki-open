@@ -8,6 +8,7 @@ import RepoInfo from '@/types/repoinfo';
 import getRepoUrl from '@/utils/getRepoUrl';
 import ModelSelectionModal from './ModelSelectionModal';
 import { createChatWebSocket, closeWebSocket, ChatCompletionRequest } from '@/utils/websocketClient';
+import { usePromptLog } from '@/contexts/PromptLogContext';
 
 interface Model {
   id: string;
@@ -78,6 +79,7 @@ const Ask: React.FC<AskProps> = ({
   const responseRef = useRef<HTMLDivElement>(null);
   const providerRef = useRef(provider);
   const modelRef = useRef(model);
+  const { addPromptLog } = usePromptLog();
 
   // Focus input on component mount
   useEffect(() => {
@@ -332,6 +334,7 @@ const Ask: React.FC<AskProps> = ({
       closeWebSocket(webSocketRef.current);
 
       let fullResponse = '';
+      let requestStartTime = Date.now();
 
       // Create a new WebSocket connection
       webSocketRef.current = createChatWebSocket(
@@ -340,6 +343,15 @@ const Ask: React.FC<AskProps> = ({
         (message: string) => {
           fullResponse += message;
           setResponse(fullResponse);
+          
+          addPromptLog({
+            source: 'GenericChat',
+            prompt: requestBody.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
+            response: fullResponse,
+            timestamp: Date.now(),
+            model: `${selectedProvider}/${isCustomSelectedModel ? customSelectedModel : selectedModel}`,
+            timeTaken: (Date.now() - requestStartTime) / 1000,
+          });
 
           // Extract research stage if this is a deep research response
           if (deepResearch) {
@@ -386,6 +398,14 @@ const Ask: React.FC<AskProps> = ({
             const completionNote = "\n\n## Final Conclusion\nAfter multiple iterations of deep research, we've gathered significant insights about this topic. This concludes our investigation process, having reached the maximum number of research iterations. The findings presented across all iterations collectively form our comprehensive answer to the original question.";
             fullResponse += completionNote;
             setResponse(fullResponse);
+            addPromptLog({
+              source: 'GenericChat',
+              prompt: requestBody.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
+              response: fullResponse,
+              timestamp: Date.now(),
+              model: `${selectedProvider}/${isCustomSelectedModel ? customSelectedModel : selectedModel}`,
+              timeTaken: (Date.now() - requestStartTime) / 1000,
+            });
             setResearchComplete(true);
           } else {
             setResearchComplete(isComplete);
@@ -405,6 +425,7 @@ const Ask: React.FC<AskProps> = ({
   // Fallback to HTTP if WebSocket fails
   const fallbackToHttp = async (requestBody: ChatCompletionRequest) => {
     try {
+      const requestStartTime = Date.now()
       // Make the API call using HTTP
       const apiResponse = await fetch(`/api/chat/stream`, {
         method: 'POST',
@@ -454,6 +475,14 @@ const Ask: React.FC<AskProps> = ({
           }
         }
       }
+      addPromptLog({
+        source: 'GenericChat',
+        prompt: requestBody.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
+        response: fullResponse,
+        timestamp: Date.now(),
+        model: `${selectedProvider}/${isCustomSelectedModel ? customSelectedModel : selectedModel}`,
+        timeTaken: (Date.now() - requestStartTime) / 1000,
+      });
 
       // Check if research is complete
       const isComplete = checkIfResearchComplete(fullResponse);
@@ -466,6 +495,15 @@ const Ask: React.FC<AskProps> = ({
         const completionNote = "\n\n## Final Conclusion\nAfter multiple iterations of deep research, we've gathered significant insights about this topic. This concludes our investigation process, having reached the maximum number of research iterations. The findings presented across all iterations collectively form our comprehensive answer to the original question.";
         fullResponse += completionNote;
         setResponse(fullResponse);
+        addPromptLog({
+          source: 'GenericChat',
+          prompt: requestBody.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
+          response: fullResponse,
+          timestamp: Date.now(),
+          model: `${selectedProvider}/${isCustomSelectedModel ? customSelectedModel : selectedModel}`,
+          timeTaken: (Date.now() - requestStartTime) / 1000,
+        });
+
         setResearchComplete(true);
       } else {
         setResearchComplete(isComplete);
@@ -574,6 +612,7 @@ const Ask: React.FC<AskProps> = ({
       closeWebSocket(webSocketRef.current);
 
       let fullResponse = '';
+      const requestStartTime = Date.now();
 
       // Create a new WebSocket connection
       webSocketRef.current = createChatWebSocket(
@@ -614,6 +653,14 @@ const Ask: React.FC<AskProps> = ({
               // The continueResearch function will be triggered by the useEffect
             }
           }
+          addPromptLog({
+            source: 'GenericChat',
+            prompt: requestBody.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
+            response: fullResponse,
+            timestamp: Date.now(),
+            model: `${selectedProvider}/${isCustomSelectedModel ? customSelectedModel : selectedModel}`,
+            timeTaken: (Date.now() - requestStartTime) / 1000,
+          });
 
           setIsLoading(false);
         }

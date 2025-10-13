@@ -3,6 +3,7 @@ import { Noto_Sans_JP, Noto_Serif_JP, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "next-themes";
 import { LanguageProvider } from "@/contexts/LanguageContext";
+import { PromptLogProvider } from "@/contexts/PromptLogContext";
 
 // Japanese-friendly fonts
 const notoSansJP = Noto_Sans_JP({
@@ -30,7 +31,7 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({
-  children
+  children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
@@ -39,9 +40,13 @@ export default function RootLayout({
       <body
         className={`${notoSansJP.variable} ${notoSerifJP.variable} ${geistMono.variable} antialiased`}
       >
-        <ThemeProvider attribute="data-theme" defaultTheme="system" enableSystem>
+        <ThemeProvider
+          attribute="data-theme"
+          defaultTheme="system"
+          enableSystem
+        >
           <LanguageProvider>
-            {children}
+            <PromptLogProvider>{children}</PromptLogProvider>
           </LanguageProvider>
         </ThemeProvider>
       </body>
