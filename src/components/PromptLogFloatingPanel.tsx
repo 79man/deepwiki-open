@@ -25,6 +25,8 @@ const PromptLogFloatingPanel: React.FC = () => {
   const [showDownloadType, setShowDownloadType] = useState(false);
   const [showLoadType, setShowLoadType] = useState(false);
 
+  const [isMaximized, setIsMaximized] = useState(false);
+
   const [markdownMode, setMarkdownMode] = useState<Record<number, boolean>>({});
   const toggleMode = (idx: number) => {
     setMarkdownMode((m) => ({ ...m, [idx]: !m[idx] }));
@@ -162,21 +164,49 @@ const PromptLogFloatingPanel: React.FC = () => {
       )}
 
       <div
-        className={`fixed z-50 top-0 right-0 h-full w-[420px] bg-white dark:bg-[var(--background)] shadow-2xl border-l border-[var(--border-color)] transition-transform duration-300
-          ${panelOpen ? "translate-x-0" : "translate-x-full"}`}
-        style={{ maxWidth: "98vw" }}
+        className={`fixed z-50 top-0 right-0 h-full bg-white dark:bg-[var(--background)] shadow-2xl border-l border-[var(--border-color)] transition-transform duration-300
+          ${panelOpen ? "translate-x-0" : "translate-x-full"}
+          ${isMaximized ? "w-screen left-0 right-0" : "w-[420px]"}
+        `}
+        style={
+          isMaximized
+            ? { width: "100vw", maxWidth: "100vw" }
+            : { maxWidth: "98vw" }
+        }
       >
         <div className="flex items-center justify-between border-b p-4">
           <span className="font-bold text-lg">
             Prompt Session Log ({filteredLog.length})
           </span>
-          <button
-            className="text-2xl hover:text-[var(--danger)]"
-            onClick={() => setPanelOpen(false)}
-            aria-label="Close Log Panel"
-          >
-            ×
-          </button>
+          <div className="flex items-center gap-2">
+            {!isMaximized && (
+              <button
+                className="text-2xl hover:text-blue-500"
+                onClick={() => setIsMaximized(true)}
+                title="Maximize prompt log panel"
+                aria-label="Maximize"
+              >
+                🗖
+              </button>
+            )}
+            {isMaximized && (
+              <button
+                className="text-2xl hover:text-blue-500"
+                onClick={() => setIsMaximized(false)}
+                title="Restore prompt log panel"
+                aria-label="Restore"
+              >
+                🗗
+              </button>
+            )}
+            <button
+              className="text-2xl hover:text-[var(--danger)]"
+              onClick={() => setPanelOpen(false)}
+              aria-label="Close Log Panel"
+            >
+              ×
+            </button>
+          </div>
         </div>
         {/* Localstorage tool bar*/}
         <div className="flex items-center gap-3 p-2 justify-end bg-[var(--background)] text-[var(--foreground)] border border-[var(--border-color)]">
