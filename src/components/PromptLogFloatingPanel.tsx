@@ -1,15 +1,140 @@
 import React, { useState } from "react";
-import { usePromptLog } from "@/contexts/PromptLogContext";
+import { PromptLogEntry, usePromptLog } from "@/contexts/PromptLogContext";
 import Markdown from "@/components/Markdown";
+
+const LOCAL_KEY = "promptLogEntries";
+
+const saveEntriesToLocal = (entries: PromptLogEntry[]) => {
+  localStorage.setItem(LOCAL_KEY, JSON.stringify(entries));
+};
+
+const loadEntriesFromLocal = (): PromptLogEntry[] => {
+  return JSON.parse(localStorage.getItem(LOCAL_KEY) || "[]");
+};
+
+const clearEntriesFromLocal = () => {
+  localStorage.removeItem(LOCAL_KEY);
+};
 
 const PromptLogFloatingPanel: React.FC = () => {
   const [panelOpen, setPanelOpen] = useState(false);
   const [sourceFilter, setSourceFilter] = useState("");
   const [modelFilter, setModelFilter] = useState("");
-  const { promptLog } = usePromptLog();
+  const { promptLog, setPromptLog } = usePromptLog();
+
+  const [showDownloadType, setShowDownloadType] = useState(false);
+  const [showLoadType, setShowLoadType] = useState(false);
+
   const [markdownMode, setMarkdownMode] = useState<Record<number, boolean>>({});
   const toggleMode = (idx: number) => {
     setMarkdownMode((m) => ({ ...m, [idx]: !m[idx] }));
+  };
+
+  const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
+  const toggleCollapsed = (idx: number) => {
+    setCollapsed((c) => ({ ...c, [idx]: !c[idx] }));
+  };
+
+  const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 1800);
+  };
+
+  const formatLogEntryClipboard = (entry: PromptLogEntry) => {
+    return [
+      `### Prompt Log Entry`,
+      `* **Timestamp:** ${new Date(entry.timestamp).toLocaleString()}`,
+      entry.source ? `* **Source:** ${entry.source}` : "",
+      entry.model ? `* **Model:** ${entry.model}` : "",
+      typeof entry.timeTaken === "number"
+        ? `* **Time taken:** ${entry.timeTaken.toFixed(2)}s`
+        : "",
+      "",
+      "",
+      "**Prompt:**",
+      "```",
+      entry.prompt,
+      "```",
+      "",
+      "**Response:**",
+      entry.response.trim().startsWith("```")
+        ? entry.response
+        : "```\n" + entry.response + "\n```",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  };
+
+  const handleCopyEntry = (entry: PromptLogEntry) => {
+    const content = formatLogEntryClipboard(entry);
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(content)
+        .then(() => showToast("Copied entry!"))
+        .catch(() => {
+          fallbackCopyTextToClipboard(content);
+          showToast("Copied entry!");
+        });
+    } else {
+      fallbackCopyTextToClipboard(content);
+      showToast("Copied entry!");
+    }
+  };
+
+  function fallbackCopyTextToClipboard(text: string) {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+      document.execCommand("copy");
+    } catch (err) {
+      // Optionally handle failed copy
+    }
+    document.body.removeChild(textArea);
+  }
+
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+
+  const handleSave = () => {
+    saveEntriesToLocal(promptLog);
+    showToast(`Saved ${promptLog.length} entries to local storage`);
+  };
+
+  const handleLoad = () => {
+    const entriesFromLocalStore = loadEntriesFromLocal();
+    setPromptLog(entriesFromLocalStore);
+    showToast(
+      `Loaded ${entriesFromLocalStore.length} entries from local storage`
+    );
+  };
+
+  const handleClearSession = () => {
+    setPromptLog([]); // clears only visible/current session logs
+    showToast("Session logs cleared");
+  };
+
+  const handleDownloadMarkdown = () => {
+    const content = promptLog // or localLog, whatever list you show
+      .map((entry) => formatLogEntryClipboard(entry))
+      .join("\n\n"); // Blank line between entries
+    const blob = new Blob([content], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `prompt_log_${new Date()
+      .toISOString()
+      .slice(0, 16)
+      .replace(/[:-]/g, "")}.md`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 100);
+    showToast("Markdown downloaded!");
   };
 
   // Filter logs by source and model substring (case-insensitive)
@@ -42,7 +167,9 @@ const PromptLogFloatingPanel: React.FC = () => {
         style={{ maxWidth: "98vw" }}
       >
         <div className="flex items-center justify-between border-b p-4">
-          <span className="font-bold text-lg">Prompt Session Log</span>
+          <span className="font-bold text-lg">
+            Prompt Session Log ({filteredLog.length})
+          </span>
           <button
             className="text-2xl hover:text-[var(--danger)]"
             onClick={() => setPanelOpen(false)}
@@ -51,6 +178,221 @@ const PromptLogFloatingPanel: React.FC = () => {
             ×
           </button>
         </div>
+        {/* Localstorage tool bar*/}
+        <div className="flex items-center gap-3 p-2 justify-end bg-[var(--background)] text-[var(--foreground)] border border-[var(--border-color)]">
+          <button
+            type="button"
+            className="px-3 py-1 bg-gray-300 text-white rounded hover:bg-gray-600 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors hover:cursor-pointer"
+            title="Clear visible logs"
+            aria-label="Clear session logs"
+            onClick={handleClearSession}
+          >
+            🧹Clear
+          </button>
+          <button
+            onClick={() => setShowDownloadType(true)}
+            className="px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors hover:cursor-pointer"
+            title="Download all Logs"
+          >
+            📥 Export
+          </button>
+
+          <button
+            onClick={handleSave}
+            className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors hover:cursor-pointer"
+            title="Save all log entries to local storage"
+          >
+            💾 Save
+          </button>
+          <button
+            onClick={() => setShowLoadType(true)}
+            className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors hover:cursor-pointer"
+            title="Load log entries"
+          >
+            📁 Load
+          </button>
+          <button
+            onClick={() => setShowClearConfirm(true)}
+            className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors hover:cursor-pointer"
+            title="Clear local storage and panel"
+          >
+            🗑️ Delete
+          </button>
+        </div>
+
+        {/* Confirmation Modal Dialogs */}
+        {/* Clear LocalStorage Confirmation Modal Dialog */}
+        {showClearConfirm && (
+          <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30">
+            <div className="bg-white dark:bg-gray-900 rounded shadow-lg p-6 max-w-xs min-w-[280px]">
+              <div className="font-bold text-red-700 mb-2">Confirm Clear</div>
+              <div className="mb-4 text-sm">
+                This will{" "}
+                <span className="font-bold text-red-700">
+                  permanently delete
+                </span>{" "}
+                all prompt log entries.
+                <br />
+                <span className="text-red-700">
+                  This action cannot be undone.
+                </span>
+              </div>
+              <div className="flex justify-end gap-3">
+                <button
+                  className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-xs font-medium"
+                  onClick={() => {
+                    clearEntriesFromLocal();
+                    setShowClearConfirm(false);
+                    showToast("Cleared from local storage");
+                  }}
+                >
+                  Yes, clear
+                </button>
+                <button
+                  className="px-3 py-1 bg-gray-200 text-gray-900 rounded hover:bg-gray-300 text-xs font-medium"
+                  onClick={() => setShowClearConfirm(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Pick Download File Type Modal Dialog */}
+        {showDownloadType && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+            <div className="bg-white dark:bg-gray-900 rounded shadow-lg p-6 min-w-[250px] max-w-xs">
+              <div className="font-bold text-lg mb-2">Download Log</div>
+              <div className="flex flex-col gap-2">
+                <button
+                  className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-semibold"
+                  onClick={() => {
+                    // Download JSON
+                    const blob = new Blob(
+                      [JSON.stringify(promptLog, null, 2)],
+                      { type: "application/json" }
+                    );
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `prompt_log_${new Date()
+                      .toISOString()
+                      .slice(0, 16)
+                      .replace(/[:-]/g, "")}.json`;
+                    document.body.appendChild(a);
+                    a.click();
+                    setTimeout(() => {
+                      document.body.removeChild(a);
+                      URL.revokeObjectURL(url);
+                    }, 100);
+                    showToast("JSON downloaded!");
+                    setShowDownloadType(false);
+                  }}
+                >
+                  Export as JSON
+                </button>
+                <button
+                  className="px-3 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 font-semibold"
+                  onClick={() => {
+                    // Download markdown
+                    const content = promptLog
+                      .map(formatLogEntryClipboard)
+                      .join("\n\n");
+                    const blob = new Blob([content], { type: "text/markdown" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `prompt_log_${new Date()
+                      .toISOString()
+                      .slice(0, 16)
+                      .replace(/[:-]/g, "")}.md`;
+                    document.body.appendChild(a);
+                    a.click();
+                    setTimeout(() => {
+                      document.body.removeChild(a);
+                      URL.revokeObjectURL(url);
+                    }, 100);
+                    showToast("Markdown downloaded!");
+                    setShowDownloadType(false);
+                  }}
+                >
+                  Export as Markdown
+                </button>
+                <button
+                  className="px-3 py-1 text-sm rounded hover:bg-gray-300"
+                  onClick={() => setShowDownloadType(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Pick Load File Type Modal Dialog */}
+        {showLoadType && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+            <div className="bg-white dark:bg-gray-900 rounded shadow-lg p-6 min-w-[250px] max-w-sm">
+              <div className="font-bold text-lg mb-2">Load Log</div>
+              <div className="flex flex-col gap-2">
+                <button
+                  className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-semibold"
+                  onClick={() => {
+                    const entriesFromLocalStore = loadEntriesFromLocal();
+                    setPromptLog(entriesFromLocalStore);
+                    showToast(
+                      `Loaded ${entriesFromLocalStore.length} entries from localStorage`
+                    );
+                    setShowLoadType(false);
+                  }}
+                >
+                  Load from LocalStorage
+                </button>
+                <label className="flex flex-col items-start w-full px-3 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 font-semibold cursor-pointer">
+                  Import from JSON file
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onload = (evt) => {
+                          try {
+                            const data = JSON.parse(
+                              evt.target?.result as string
+                            );
+                            if (Array.isArray(data)) {
+                              setPromptLog(data);
+                              showToast(
+                                `Loaded ${data.length} entries from file`
+                              );
+                              setShowLoadType(false);
+                            } else {
+                              showToast("Invalid file format");
+                            }
+                          } catch {
+                            showToast("Error reading file");
+                          }
+                        };
+                        reader.readAsText(file);
+                      }
+                    }}
+                  />
+                </label>
+                <button
+                  className="px-3 py-1 text-sm rounded hover:bg-gray-300"
+                  onClick={() => setShowLoadType(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Filter Bar */}
         <div className="border-b p-4 bg-[var(--background)]">
           <div className="grid grid-cols-2 gap-3 items-center">
@@ -135,78 +477,123 @@ const PromptLogFloatingPanel: React.FC = () => {
               No prompts for this filter.
             </div>
           )}
+          {toast && (
+            <div className="fixed bottom-7 right-7 z-50 px-4 py-2 font-bold bg-green-600 text-white rounded shadow-lg transition-opacity animate-fadeIn">
+              {toast}
+            </div>
+          )}
           {filteredLog.map((entry, i) => (
             <div
               key={i}
-              className="mb-6 bg-[var(--card-bg)] rounded shadow p-3"
+              className="mb-2 bg-[var(--card-bg)] rounded shadow p-3"
             >
-              <div className="text-xs text-gray-400 mb-2 flex justify-between items-center">
-                <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
-                <span className="text-[var(--accent-primary)] font-semibold">
-                  {entry.source}
+              {/* Collapse toggle & summary header */}
+              <div
+                className="flex items-center justify-between mb-2 cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-gray-800 rounded px-2 py-1 transition"
+                onClick={() => toggleCollapsed(i)}
+                title={collapsed[i] ? "Expand" : "Collapse"}
+                aria-label={collapsed[i] ? "Expand entry" : "Collapse entry"}
+                tabIndex={0}
+                role="button"
+                onKeyPress={(e) => {
+                  if (e.key === "Enter" || e.key === " ") toggleCollapsed(i);
+                }}
+              >
+                <span className="font-bold text-base text-[var(--accent-primary)]">
+                  #{i + 1} {entry.source && `[${entry.source}]`}{" "}
+                  {entry.model && `(${entry.model})`}
+                </span>
+                <span className="text-lg w-7 h-7 flex items-center justify-center">
+                  {collapsed[i] ? "▶" : "▼"}
                 </span>
               </div>
-              <div className="text-xs text-gray-500 mb-1 flex justify-between">
-                <span>
-                  Model:{" "}
-                  {entry.model ? (
-                    <b>{entry.model}</b>
-                  ) : (
-                    <span className="text-gray-400 italic">-</span>
-                  )}
-                </span>
-                <span>
-                  {typeof entry.timeTaken === "number" ? (
-                    <>
-                      Time Taken: <b>{entry.timeTaken.toFixed(2)}</b> s
-                    </>
-                  ) : (
-                    <span className="text-gray-400 italic">Time Taken: -</span>
-                  )}
-                </span>
-              </div>
-              <div className="font-bold text-sm mb-1 text-[var(--accent-primary)]">
-                Prompt:
-              </div>
-              <pre className="bg-[var(--background)] rounded p-2 text-xs overflow-x-auto whitespace-pre-wrap">
-                {entry.prompt}
-              </pre>
-              <div className="font-bold text-sm mt-2 mb-1">Response:</div>
-              <div className="mb-6 bg-[var(--card-bg)] rounded shadow p-3">
-                {/* other info: timestamp/source/model/etc */}
-                <div className="font-bold text-sm mb-1 text-[var(--accent-primary)]">
-                  Response:
-                </div>
 
-                {/* Response display with top-right toggle button */}
-                <div className="relative bg-[var(--background)] rounded p-2 text-xs overflow-x-auto whitespace-pre-wrap">
-                  <button
-                    onClick={() => toggleMode(i)}
-                    className="absolute top-2 right-2 text-2xl bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-700 rounded-full w-9 h-9 flex items-center justify-center shadow hover:bg-[var(--accent-primary)]/20 transition"
-                    aria-label={
-                      markdownMode[i] ? "Show plain text" : "Show markdown"
-                    }
-                    title={
-                      markdownMode[i] ? "Show plain text" : "Show markdown"
-                    }
-                    type="button"
-                  >
-                    {
-                      markdownMode[i] ? (
-                        <>≡</> // 3 horizontal lines for "plain"
+              {/* Only render detailed content if not collapsed */}
+              {!collapsed[i] && (
+                <>
+                  {/* Toolbar */}
+                  <div className="flex items-center justify-end mb-2 gap-2 bg-[var(--background)] p-1">
+                    {/* Markdown/Plain Toggle */}
+                    <button
+                      onClick={() => toggleMode(i)}
+                      className="text-xl bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-700 rounded-full w-8 h-8 flex items-center justify-center shadow hover:bg-[var(--accent-primary)]/20 transition"
+                      aria-label={
+                        markdownMode[i] ? "Show plain text" : "Show markdown"
+                      }
+                      title={
+                        markdownMode[i] ? "Show plain text" : "Show markdown"
+                      }
+                      type="button"
+                    >
+                      {markdownMode[i] ? <>≡</> : <>{"{}"}</>}
+                    </button>
+                    {/* Copy to clipboard */}
+                    <button
+                      onClick={() => handleCopyEntry(entry)}
+                      className="text-xl bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-700 rounded-full w-8 h-8 flex items-center justify-center shadow hover:bg-green-200 dark:hover:bg-green-900 transition"
+                      aria-label="Copy response"
+                      title="Copy response"
+                      type="button"
+                    >
+                      📋
+                    </button>
+                    {/* Add more toolbar items here if needed */}
+                  </div>
+
+                  {/* Card header, metadata etc. */}
+                  <div className="text-xs text-gray-400 mb-2 flex justify-between items-center">
+                    <span>
+                      {new Date(entry.timestamp).toLocaleTimeString()}
+                    </span>
+                    <span className="text-[var(--accent-primary)] font-semibold">
+                      {entry.source}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-500 mb-1 flex justify-between">
+                    <span>
+                      Model:{" "}
+                      {entry.model ? (
+                        <b>{entry.model}</b>
                       ) : (
-                        <>{"{}"}</>
-                      ) // curly braces for markdown
-                    }
-                  </button>
+                        <span className="text-gray-400 italic">-</span>
+                      )}
+                    </span>
+                    <span>
+                      {typeof entry.timeTaken === "number" ? (
+                        <>
+                          Time Taken: <b>{entry.timeTaken.toFixed(2)}</b> s
+                        </>
+                      ) : (
+                        <span className="text-gray-400 italic">
+                          Time Taken: -
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="font-bold text-sm mb-1 text-[var(--accent-primary)]">
+                    Prompt:
+                  </div>
+                  {markdownMode[i] ? (
+                    <Markdown content={entry.prompt} />
+                  ) : (
+                    <pre className="bg-[var(--background)] rounded p-2 text-xs overflow-x-auto whitespace-pre-wrap">
+                      {entry.prompt}
+                    </pre>
+                  )}
 
+                  {/* Response (markdown or pre) */}
+                  <div className="font-bold text-sm mb-1 text-[var(--accent-primary)]">
+                    Response:
+                  </div>
                   {markdownMode[i] ? (
                     <Markdown content={entry.response} />
                   ) : (
-                    <pre>{entry.response}</pre>
+                    <pre className="bg-[var(--background)] rounded p-2 text-xs overflow-x-auto whitespace-pre-wrap">
+                      {entry.response}
+                    </pre>
                   )}
-                </div>
-              </div>
+                </>
+              )}
             </div>
           ))}
         </div>

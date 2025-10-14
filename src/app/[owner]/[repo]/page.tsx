@@ -795,6 +795,7 @@ Remember:
 
         // Use WebSocket for communication
         let content = '';
+        let requestStartTime = Date.now();
 
         try {
           // Create WebSocket URL from the server base URL
@@ -852,6 +853,8 @@ Remember:
                 prompt: requestBody.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
                 response: content, // variable holding the generated page markdown
                 timestamp: Date.now(),
+                model: `${finalProvider}/${finalIsCustomModel ? finalCustomModel : finalModel}`,
+                timeTaken: (Date.now() - requestStartTime) / 1000,
               });
 
               resolve();
@@ -904,12 +907,12 @@ Remember:
           }
         }
 
-        addPromptLog({
-          source: 'PageContent',
-          prompt: requestBody.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
-          response: content, // variable holding the generated page markdown
-          timestamp: Date.now(),
-        });
+        // addPromptLog({
+        //   source: 'PageContent',
+        //   prompt: requestBody.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
+        //   response: content, // variable holding the generated page markdown
+        //   timestamp: Date.now(),
+        // });
 
         // Clean up markdown delimiters
         content = content.replace(/^```markdown\s*/i, '').replace(/```\s*$/i, '');
@@ -1229,10 +1232,23 @@ Remember:
       };
 
       // Add tokens if available
-      addTokensToRequestBody(requestBody, currentToken, effectiveRepoInfo.type, selectedProviderState, selectedModelState, isCustomSelectedModelState, customSelectedModelState, language, modelExcludedDirs, modelExcludedFiles, modelIncludedDirs, modelIncludedFiles);
+      addTokensToRequestBody(
+        requestBody, 
+        currentToken, 
+        effectiveRepoInfo.type, 
+        selectedProviderState, 
+        selectedModelState, 
+        isCustomSelectedModelState, 
+        customSelectedModelState, 
+        language, 
+        modelExcludedDirs, modelExcludedFiles, 
+        modelIncludedDirs, modelIncludedFiles
+      );
 
       // Use WebSocket for communication
       let responseText = '';
+      const requestStartTime = Date.now();
+      let requestEndTime = requestStartTime;
 
       try {
         // Create WebSocket URL from the server base URL
@@ -1285,12 +1301,14 @@ Remember:
           // Handle WebSocket close
           ws.onclose = () => {
             console.log('WebSocket connection closed for wiki structure');
+            requestEndTime = Date.now();
             resolve();
           };
 
           // Handle WebSocket errors
           ws.onerror = (error) => {
             console.error('WebSocket error during message reception:', error);
+            requestEndTime = Date.now();
             reject(new Error('WebSocket error during message reception'));
           };
         });
@@ -1307,6 +1325,7 @@ Remember:
         });
 
         if (!response.ok) {
+          requestEndTime = Date.now();
           throw new Error(`Error determining wiki structure: ${response.status}`);
         }
 
@@ -1324,6 +1343,7 @@ Remember:
           if (done) break;
           responseText += decoder.decode(value, { stream: true });
         }
+        requestEndTime = Date.now();
       }
 
       if(responseText.includes('Error preparing retriever: Environment variable OPENAI_API_KEY must be set')) {
@@ -1339,10 +1359,10 @@ Remember:
       // Add your debug line here:  
       // console.log('Full AI response:', responseText);  
       // Clean up markdown delimiters
-      responseText = responseText.replace(/^```(?:xml)?\s*/i, '').replace(/```\s*$/i, '');
+      const cleanedResponseText = responseText.replace(/^```(?:xml)?\s*/i, '').replace(/```\s*$/i, '');
       
       // Extract wiki structure from response
-      const xmlMatch = responseText.match(/<wiki_structure>[\s\S]*?<\/wiki_structure>/m);
+      const xmlMatch = cleanedResponseText.match(/<wiki_structure>[\s\S]*?<\/wiki_structure>/m);
       if (!xmlMatch) {
         throw new Error('No valid XML found in response');
       }
@@ -1503,6 +1523,8 @@ Remember:
         prompt: requestBody.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
         response: responseText,
         timestamp: Date.now(),
+        model: `${selectedProviderState}/${isCustomSelectedModelState ? customSelectedModelState : selectedModelState}`,
+        timeTaken: (requestEndTime - requestStartTime) / 1000,
       });
 
       const timeTaken = Math.floor((Date.now() - structureStartTime) / 1000);  

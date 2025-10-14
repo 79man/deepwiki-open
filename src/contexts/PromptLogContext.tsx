@@ -31,7 +31,7 @@ export const PromptLogProvider: React.FC<{ children: ReactNode }> = ({
   };
 
   return (
-    <PromptLogContext.Provider value={{ promptLog, addPromptLog }}>
+    <PromptLogContext.Provider value={{ promptLog, addPromptLog, setPromptLog }}>
       {children}
     </PromptLogContext.Provider>
   );
