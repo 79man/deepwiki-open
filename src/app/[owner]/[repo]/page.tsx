@@ -91,6 +91,32 @@ const wikiStyles = `
   .prose td {
     @apply p-2 border border-[var(--border-color)];
   }
+  
+  .prose .src-list {
+    border-radius: var(--radius-md);
+    border-style: var(--tw-border-style);
+    border-width: 1px;
+    border-color: var(--border-color);
+    background-color: var(--background);
+    padding-inline: calc(var(--spacing) * 3);
+    padding-block: calc(var(--spacing) * 2);
+    color: var(--foreground);
+  }
+  
+  .prose details {
+    border-radius: var(--radius-md);
+    border-style: var(--tw-border-style);
+    border-width: 1px;
+    border-color: var(--border-color);
+    background-color: var(--background);
+    padding-inline: calc(var(--spacing) * 3);
+    padding-block: calc(var(--spacing) * 2);
+    color: var(--foreground);
+    cursor: pointer;
+  }
+  .prose ul {
+    margin-top: calc(var(--spacing) * 4);
+  }
 `;
 
 // Helper function to generate cache key for localStorage
@@ -255,6 +281,7 @@ export default function RepoWikiPage() {
   // Control prompt editing widget
   const [showPromptModal, setShowPromptModal] = useState(false);
   const [promptToEdit, setPromptToEdit] = useState('');
+  const [modelToShow, setModelToShow] = useState('');
   const [onPromptConfirm, setOnPromptConfirm] = useState<null | ((editedPrompt: string) => void)>(null);
   const [onPromptCancel, setOnPromptCancel] = useState<null | (() => void)>(null);
 
@@ -319,9 +346,10 @@ export default function RepoWikiPage() {
   // Default branch state
   const [defaultBranch, setDefaultBranch] = useState<string>('main');
 
-  function showPromptEditModal(prompt: string): Promise<string> {
+  function showPromptEditModal(prompt: string, model: string = "-"): Promise<string> {
     return new Promise((resolve, reject) => {
       setPromptToEdit(prompt);
+      setModelToShow(model)
       setShowPromptModal(true);
       setOnPromptConfirm(() => (editedPrompt: string) => {
         resolve(editedPrompt);
@@ -657,9 +685,9 @@ Based ONLY on the content of the \`[RELEVANT_SOURCE_FILES]\`:
 6.  **Source Citations (EXTREMELY IMPORTANT):**
     *   For EVERY piece of significant information, explanation, diagram, table entry, or code snippet, you MUST cite the specific source file(s) and relevant line numbers from which the information was derived.
     *   Place citations at the end of the paragraph, under the diagram/table, or after the code snippet.
-    *   Use the exact format: \`Sources: [filename.ext:start_line-end_line]()\` for a range, or \`Sources: [filename.ext:line_number]()\` for a single line. Multiple files can be cited: \`Sources: [file1.ext:1-10](), [file2.ext:5](), [dir/file3.ext]()\` (if the whole file is relevant and line numbers are not applicable or too broad).
+    *   Use the exact format: \`Sources: <ul class="src-list"><li>[filename.ext:start_line-end_line]()</li></ul>\` for a range, or \`Sources: <ul class="src-list"><li>[filename.ext:line_number]()</li></ul>\` for a single line. Multiple files can be cited: \`Sources:<ul class="src-list"><li> [file1.ext:1-10]()</li><li>[file2.ext:5]()</li><li>[dir/file3.ext]()</li></ul>\` (if the whole file is relevant and line numbers are not applicable or too broad). 
     *   If an entire section is overwhelmingly based on one or two files, you can cite them under the section heading in addition to more specific citations within the section.
-    *   IMPORTANT: You MUST cite AT LEAST 5 different source files throughout the wiki page to ensure comprehensive coverage.
+    *   IMPORTANT: You MUST cite AT LEAST 5 different source files throughout the wiki page to ensure comprehensive coverage.   
 
 7.  **Technical Accuracy:** All information must be derived SOLELY from the \`[RELEVANT_SOURCE_FILES]\`. Do not infer, invent, or use external knowledge about similar systems or common practices unless it's directly supported by the provided code. If information is not present in the provided files, do not include it or explicitly state its absence if crucial to the topic.
 
@@ -742,7 +770,7 @@ Remember:
         // Make API call to generate page content
         console.log(`Starting content generation for page: ${page.title}`);
 
-        setLoadingMessage(`Generation content for page: ${page.title}`);
+        setLoadingMessage(`Generating content for page: ${page.title}`);
 
         // Get repository URL
         const repoUrl = getRepoUrl(effectiveRepoInfo);
@@ -1048,7 +1076,8 @@ Remember:
         setPendingPageRefreshParams(params);
         
         // Update the prompt if edited
-        prompt = await showPromptEditModal(prompt);
+        const model_to_use = `${params.provider}/${params.isCustomModel ? params.customModel : params.model}`
+        prompt = await showPromptEditModal(prompt,model_to_use);
       }
       return performPageRefresh(pageId, params, prompt);
                
@@ -1206,6 +1235,7 @@ Remember:
       let finalPrompt = structurePrompt;
       if (enablePromptEditing) {
         try {
+          const model_to_use = `${selectedProviderState}/${isCustomSelectedModelState ? customSelectedModelState : selectedModelState}`
           finalPrompt = await showPromptEditModal(structurePrompt);
         } catch (err) {
           // The user cancelled the edit -- gracefully abort structure determination
@@ -2762,7 +2792,7 @@ Remember:
                     <button  
                       onClick={() => refreshPage(currentPageId)}  
                       disabled={pagesInProgress.has(currentPageId)}  
-                      className="flex items-center px-3 py-1.5 text-sm bg-[var(--background)] text-[var(--foreground)] rounded-md hover:bg-[var(--background)]/80 disabled:opacity-50 disabled:cursor-not-allowed border border-[var(--border-color)] transition-colors"  
+                      className="flex items-center px-3 py-2 bg-[var(--accent-primary)] text-white rounded-md hover:bg-[var(--accent-primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed border border-[var(--border-color)] transition-colors hover:cursor-pointer"  
                       title="Refresh this page"  
                     >  
                       <FaSync className={`mr-2 ${pagesInProgress.has(currentPageId) ? 'animate-spin' : ''}`} />  
@@ -2900,6 +2930,7 @@ Remember:
       <PromptEditorModal
         isOpen={showPromptModal}
         prompt={promptToEdit}
+        model={modelToShow}
         // onApply={handleApplyPromptEdit}
         onApply={(editedPrompt: string) => {
           setShowPromptModal(false);

@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 export interface PromptEditorModalProps {
   isOpen: boolean;
   prompt: string;
+  model: string;
   onApply: (editedPrompt: string) => void;
   onCancel: () => void;
 }
@@ -10,21 +11,24 @@ export interface PromptEditorModalProps {
 const PromptEditorModal: React.FC<PromptEditorModalProps> = ({
   isOpen,
   prompt,
+  model,
   onApply,
   onCancel,
 }) => {
   const [editedPrompt, setEditedPrompt] = useState<string>(prompt);
+  const [editedModel, setEditedModel] = useState<string>(model);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Reset edited prompt whenever modal opens or prompt changes
   useEffect(() => {
     if (isOpen) {
       setEditedPrompt(prompt);
+      setEditedModel(model);
       setTimeout(() => {
         textareaRef.current?.focus();
       }, 200);
     }
-  }, [isOpen, prompt]);
+  }, [isOpen, prompt, model]);
 
   if (!isOpen) return null;
 
@@ -45,6 +49,9 @@ const PromptEditorModal: React.FC<PromptEditorModalProps> = ({
             Edit Generation Prompt
             <span className="text-xs font-normal ml-3 text-[var(--muted)] bg-[var(--background)] px-2 py-1 rounded border border-[var(--border-color)]/50">
               {editedPrompt.length} chars
+            </span>
+            <span className="text-xs font-normal ml-3 text-[var(--muted)] bg-[var(--background)] px-2 py-1 rounded border border-[var(--border-color)]/50">
+              {editedModel}
             </span>
           </h2>
           <button
