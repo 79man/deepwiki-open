@@ -13,9 +13,59 @@ from pydantic import BaseModel, Field
 import google.generativeai as genai
 import asyncio
 from api.config import get_model_config as get_model_configuration
+import fnmatch
+import pathspec
 
 # Configure logging
 from api.logging_config import setup_logging
+
+EXCLUDED_DIRS = {
+    '.git', '.svn', '.hg',  # Version control
+    '__pycache__', '.pytest_cache', '.mypy_cache',  # Python caches
+    'node_modules', 'bower_components',  # JavaScript
+    '.venv', 'venv', 'env', 'virtualenv',  # Python virtual environments
+    'build', 'dist', 'target', 'out',  # Build outputs
+    '.idea', '.vscode', '.vs',  # IDE directories
+    'coverage', '.coverage',  # Test coverage
+}
+
+EXCLUDED_FILES = {
+    '.DS_Store', 'Thumbs.db',  # OS files
+    '__init__.py',  # Python package markers
+    '*.pyc', '*.pyo', '*.pyd',  # Python compiled files
+    '*.so', '*.dll', '*.dylib',  # Compiled libraries
+    '*.log',  # Log files
+}
+
+MAX_FILE_SIZE = 1024 * 1024  # 1MB limit
+
+
+def is_binary_file(file_path: str) -> bool:
+    """Check if a file is binary by reading its first few bytes."""
+    try:
+        with open(file_path, 'rb') as f:
+            chunk = f.read(1024)
+            # Check for null bytes which indicate binary content
+            if b'\x00' in chunk:
+                return True
+            # Check for high ratio of non-text bytes
+            text_chars = bytearray(
+                {7, 8, 9, 10, 12, 13, 27} | set(range(0x20, 0x100)) - {0x7f})
+            non_text = sum(1 for byte in chunk if byte not in text_chars)
+            return non_text / len(chunk) > 0.3 if chunk else False
+    except Exception:
+        return False  # Assume text if we can't read it
+
+
+def load_gitignore_patterns(repo_path):
+    """Load and parse .gitignore patterns."""
+    gitignore_path = os.path.join(repo_path, '.gitignore')
+    if os.path.exists(gitignore_path):
+        with open(gitignore_path, 'r') as f:
+            spec = pathspec.PathSpec.from_lines('gitwildmatch', f)
+            return spec
+    return None
+
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -352,19 +402,61 @@ async def get_local_repo_structure(path: str = Query(None, description="Path to 
     try:
         logger.info(f"Processing local repository at: {path}")
         file_tree_lines = []
+        file_tree_data = []
         readme_content = ""
+
+        gitignore_spec = load_gitignore_patterns(path)
 
         for root, dirs, files in os.walk(path):
             # Exclude hidden dirs/files and virtual envs
-            dirs[:] = [d for d in dirs if not d.startswith(
-                '.') and d != '__pycache__' and d != 'node_modules' and d != '.venv']
+            # dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__' and d != 'node_modules' and d != '.venv']
+            dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
+            if gitignore_spec:
+                dirs[:] = [
+                    d for d in dirs if not gitignore_spec.match_file(os.path.relpath(os.path.join(root, d), path))]
+
+            # for file in files:
+            #     if file.startswith('.') or file == '__init__.py' or file == '.DS_Store':
+            #         continue
+
+            # eliminate files matching EXCLUDED_FILES using fnmatch.fnmatch
+            files[:] = [
+                f for f in files
+                if not any(fnmatch.fnmatch(f, pattern) for pattern in EXCLUDED_FILES)
+            ]
+
+            if gitignore_spec:
+                files[:] = [
+                    f for f in files
+                    if not gitignore_spec.match_file(os.path.relpath(os.path.join(root, f), path))
+                ]
+
             for file in files:
-                if file.startswith('.') or file == '__init__.py' or file == '.DS_Store':
+                # rel_dir = os.path.relpath(root, path)
+                # rel_file = os.path.join(
+                #     rel_dir, file) if rel_dir != '.' else file
+
+                # file_tree_lines.append(rel_file)
+
+                file_path = os.path.join(root, file)
+                rel_path = os.path.relpath(file_path, path)
+                try:
+                    stat = os.stat(file_path)
+                    if stat.st_size > MAX_FILE_SIZE:
+                        continue
+
+                    if is_binary_file(file_path):
+                        continue
+
+                    file_tree_data.append({
+                        'path': rel_path,
+                        'size': stat.st_size,
+                        'modified': stat.st_mtime,
+                        # 'is_binary': is_binary_file(file_path)
+                    })
+                except OSError:
                     continue
-                rel_dir = os.path.relpath(root, path)
-                rel_file = os.path.join(
-                    rel_dir, file) if rel_dir != '.' else file
-                file_tree_lines.append(rel_file)
+
                 # Find README.md (case-insensitive)
                 if file.lower() == 'readme.md' and not readme_content:
                     try:
@@ -374,8 +466,12 @@ async def get_local_repo_structure(path: str = Query(None, description="Path to 
                         logger.warning(f"Could not read README.md: {str(e)}")
                         readme_content = ""
 
-        file_tree_str = '\n'.join(sorted(file_tree_lines))
-        return {"file_tree": file_tree_str, "readme": readme_content}
+        # file_tree_str = '\n'.join(sorted(file_tree_lines))
+        return {
+            # "file_tree": file_tree_str,
+            "file_tree": file_tree_data,
+            "readme": readme_content
+        }
     except Exception as e:
         logger.error(f"Error processing local repository: {str(e)}")
         return JSONResponse(

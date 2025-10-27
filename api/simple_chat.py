@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from api.config import get_model_config, configs, OPENROUTER_API_KEY, OPENAI_API_KEY, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+from api.config import get_context_window_size, get_model_config, configs, OPENROUTER_API_KEY, OPENAI_API_KEY, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 from api.data_pipeline import count_tokens, get_file_content
 from api.openai_client import OpenAIClient
 from api.openrouter_client import OpenRouterClient
@@ -84,9 +84,14 @@ async def chat_completions_stream(request: ChatCompletionRequest):
             last_message = request.messages[-1]
             if hasattr(last_message, 'content') and last_message.content:
                 tokens = count_tokens(last_message.content, request.provider == "ollama")
-                logger.info(f"Request size: {tokens} tokens")
-                if tokens > 8000:
-                    logger.warning(f"Request exceeds recommended token limit ({tokens} > 7500)")
+                # Get context window size for this provider/model  
+                context_window = get_context_window_size(request.provider, request.model)  
+                # Use 80% of context window as safe limit to leave room for response  
+                safe_limit = int(context_window * 0.8)  
+                
+                logger.info(f"Request size: {tokens} tokens (limit: {safe_limit})")  
+                if tokens > safe_limit:
+                    logger.warning(f"Request exceeds recommended token limit ({tokens} > {safe_limit})")
                     input_too_large = True
 
         # Create a new RAG instance for this request
@@ -203,32 +208,40 @@ async def chat_completions_stream(request: ChatCompletionRequest):
                     # This will use the actual RAG implementation
                     rag_answer, retrieved_documents = request_rag(rag_query, language=request.language)
 
-                    if retrieved_documents and retrieved_documents[0].documents:
-                        # Format context for the prompt in a more structured way
-                        documents = retrieved_documents[0].documents
-                        logger.info(f"Retrieved {len(documents)} documents")
-
-                        # Group documents by file path
-                        docs_by_file = {}
-                        for doc in documents:
-                            file_path = doc.meta_data.get('file_path', 'unknown')
-                            if file_path not in docs_by_file:
-                                docs_by_file[file_path] = []
-                            docs_by_file[file_path].append(doc)
-
-                        # Format context text with file path grouping
-                        context_parts = []
-                        for file_path, docs in docs_by_file.items():
-                            # Add file header with metadata
-                            header = f"## File Path: {file_path}\n\n"
-                            # Add document content
-                            content = "\n\n".join([doc.text for doc in docs])
-
-                            context_parts.append(f"{header}{content}")
-
-                        # Join all parts with clear separation
-                        context_text = "\n\n" + "-" * 10 + "\n\n".join(context_parts)
-                    else:
+                    if retrieved_documents and retrieved_documents[0].documents:  
+                        # Format context for the prompt in a more structured way  
+                        documents = retrieved_documents[0].documents  
+                        doc_scores = retrieved_documents[0].doc_scores  # Extract scores  
+                        logger.info(f"Retrieved {len(documents)} documents")  
+                    
+                        # Group documents by file path with their scores  
+                        docs_by_file = {}  
+                        for idx, doc in enumerate(documents):  
+                            file_path = doc.meta_data.get('file_path', 'unknown')  
+                            if file_path not in docs_by_file:  
+                                docs_by_file[file_path] = []  
+                            # Store document with its score  
+                            score = doc_scores[idx] if idx < len(doc_scores) else None  
+                            docs_by_file[file_path].append((doc, score))  
+                    
+                        # Format context text with file path grouping and scores  
+                        context_parts = []  
+                        for file_path, doc_score_pairs in docs_by_file.items():  
+                            # Add file header with metadata  
+                            header = f"## File Path: {file_path}\n\n"  
+                            
+                            # Add document content with relevance scores  
+                            content_parts = []  
+                            for doc, score in doc_score_pairs:  
+                                score_str = f"(Relevance: {score:.3f})" if score is not None else "(Relevance: N/A)"  
+                                content_parts.append(f"{score_str}\n{doc.text}")  
+                            
+                            content = "\n\n".join(content_parts)  
+                            context_parts.append(f"{header}{content}")  
+                    
+                        # Join all parts with clear separation  
+                        context_text = "\n\n" + "-" * 10 + "\n\n".join(context_parts)  
+                    else:  
                         logger.warning(f"No documents retrieved from RAG: {rag_answer}")
                 except Exception as e:
                     logger.error(f"Error in RAG retrieval: {str(e)}")

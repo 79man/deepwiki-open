@@ -363,3 +363,22 @@ def get_model_config(provider="google", model=None):
         result["model_kwargs"] = {"model": model, **model_params}
 
     return result
+
+def get_context_window_size(provider: str, model: str) -> int:  
+    """Get the context window size for a given provider/model."""  
+    model_config = get_model_config(provider, model)  
+      
+    # For Ollama, use num_ctx from model_kwargs  
+    if provider == "ollama":  
+        return model_config["model_kwargs"].get("num_ctx", 8000)  
+      
+    # For other providers, define defaults or read from config  
+    context_windows = {  
+        "google": 1000000,  # Gemini 2.0 Flash  
+        "openai": 128000,   # GPT-4  
+        "openrouter": 128000,  # Varies by model  
+        "bedrock": 200000,  # Claude 3.5  
+        "azure": 128000,  
+    }  
+      
+    return context_windows.get(provider, 8000)

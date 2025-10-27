@@ -472,6 +472,7 @@ class MyOllamaClient(ModelClient):
                 api_kwargs.pop("generate")
                 return await self.async_client.generate(**api_kwargs)
             else:
+                logger.info(f"Calling chat(api_kwargs:\n{api_kwargs})")
                 return await self.async_client.chat(**api_kwargs)
         else:
             raise ValueError(f"model_type {model_type} is not supported")

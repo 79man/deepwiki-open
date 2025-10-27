@@ -284,6 +284,7 @@ export default function RepoWikiPage() {
   const [modelToShow, setModelToShow] = useState('');
   const [onPromptConfirm, setOnPromptConfirm] = useState<null | ((editedPrompt: string) => void)>(null);
   const [onPromptCancel, setOnPromptCancel] = useState<null | (() => void)>(null);
+  const [promptModalTitle, setPromptModalTitle] = useState('Edit Generator Prompt');
 
   // const [pendingPrompt, setPendingPrompt] = useState('');
   const [pendingPageId, setPendingPageId] = useState<string | null>(null);
@@ -346,10 +347,15 @@ export default function RepoWikiPage() {
   // Default branch state
   const [defaultBranch, setDefaultBranch] = useState<string>('main');
 
-  function showPromptEditModal(prompt: string, model: string = "-"): Promise<string> {
+  function showPromptEditModal(
+    prompt: string, 
+    model: string = "-", 
+    title: string = "Edit Generation Prompt"
+  ): Promise<string> {
     return new Promise((resolve, reject) => {
       setPromptToEdit(prompt);
-      setModelToShow(model)
+      setModelToShow(model);
+      setPromptModalTitle(title);
       setShowPromptModal(true);
       setOnPromptConfirm(() => (editedPrompt: string) => {
         resolve(editedPrompt);
@@ -467,10 +473,124 @@ export default function RepoWikiPage() {
     return () => clearInterval(interval);  
   }, [pageStartTime, currentGeneratingPageId]);
 
+  const analyzeReadmeContent = useCallback(async (readme: string, owner: string, repo: string) => {  
+    let readmeAnalysisPrompt = `Analyze this README.md file and extract key information:  
+    
+  <readme>  
+  ${readme}  
+  </readme>  
+    
+  Extract and return in JSON format:  
+  {  
+    "project_purpose": "Brief description of what the project does",  
+    "key_features": ["feature1", "feature2", ...],  
+    "architecture_overview": "High-level architecture description",  
+    "main_technologies": ["tech1", "tech2", ...],  
+    "important_sections": ["section1", "section2", ...]  
+  }  
+    
+  Return ONLY valid JSON, no markdown formatting.`;
+    
+    if (enablePromptEditing) {
+      try {
+        // Update the prompt if edited
+        const model_to_use = `${params.provider}/${params.isCustomModel ? params.customModel : params.model}`
+        readmeAnalysisPrompt = await showPromptEditModal(
+          readmeAnalysisPrompt,
+          model_to_use,
+          "Edit Readme Analysis Prompt"
+        );
+      } catch (err) {
+        console.error("Error in editing Readme Analysis prompt", err);
+      }
+    }
+
+    const requestBody = {  
+      repo_url: getRepoUrl(effectiveRepoInfo),  
+      type: effectiveRepoInfo.type,  
+      messages: [{  
+        role: 'user',  
+        content: readmeAnalysisPrompt  
+      }]  
+    };  
+    
+    addTokensToRequestBody(  
+      requestBody,  
+      currentToken,  
+      effectiveRepoInfo.type,  
+      selectedProviderState,  
+      selectedModelState,  
+      isCustomSelectedModelState,  
+      customSelectedModelState,  
+      language,  
+      modelExcludedDirs, modelExcludedFiles,  
+      modelIncludedDirs, modelIncludedFiles  
+    );  
+    
+    try {  
+      const response = await fetch(`/api/chat/stream`, {  
+        method: 'POST',  
+        headers: { 'Content-Type': 'application/json' },  
+        body: JSON.stringify(requestBody)  
+      });  
+    
+      if (!response.ok) {  
+        throw new Error(`README analysis failed: ${response.status}`);  
+      }  
+    
+      let responseText = '';  
+      const reader = response.body?.getReader();  
+      const decoder = new TextDecoder();  
+    
+      if (!reader) throw new Error('Failed to get response reader');  
+    
+      while (true) {  
+        const { done, value } = await reader.read();  
+        if (done) break;  
+        responseText += decoder.decode(value, { stream: true });  
+      }  
+    
+      // Extract JSON from response (may be wrapped in markdown)  
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);  
+      if (jsonMatch) {  
+        return JSON.parse(jsonMatch[0]);  
+      }  
+        
+      throw new Error('Could not parse README analysis response');  
+    } catch (error) {  
+      console.error('Error analyzing README:', error);  
+      // Return a basic summary if analysis fails  
+      return {  
+        project_purpose: readme.substring(0, 500),  
+        key_features: [],  
+        architecture_overview: "",  
+        main_technologies: [],  
+        important_sections: []  
+      };  
+    }  
+  }, [currentToken, effectiveRepoInfo, selectedProviderState, selectedModelState, isCustomSelectedModelState, customSelectedModelState, language, modelExcludedDirs, modelExcludedFiles, modelIncludedDirs, modelIncludedFiles]);
+
   const buildStructureGenerationPrompt = async(
-    fileTree: string, readme: string, owner: string, repo: string
+    fileTree: string, 
+    readme: string | {project_purpose: string, key_features: string[], architecture_overview: string, main_technologies: string[], important_sections: string[]},
+    owner: string, repo: string
   ) => {
-    const repoAnalysis = await analyzeRepository(fileTree, readme);
+    const repoAnalysis = await analyzeRepository(fileTree, typeof readme === 'string' ? readme : readme.project_purpose); 
+    // Format README content  
+    let readmeSection: string;  
+    if (typeof readme === 'string') {  
+      readmeSection = `2. The README file of the project:  
+<readme>  
+${readme}  
+</readme>`;  
+    } else {  
+      readmeSection = `2. README Analysis Summary:  
+- Project Purpose: ${readme.project_purpose}  
+- Key Features: ${readme.key_features.join(', ')}  
+- Architecture: ${readme.architecture_overview}  
+- Technologies: ${readme.main_technologies.join(', ')}  
+- Important Sections: ${readme.important_sections.join(', ')}`;  
+    }  
     const promptContent = `Analyze this ${repoAnalysis.type} repository ${owner}/${repo} and create a wiki structure for it.
   
 Repository Analysis:  
@@ -488,7 +608,7 @@ ${fileTree}
 
 2. The README file of the project:
 <readme>
-${readme}
+${readmeSection}
 </readme>
 
 I want to create a wiki for this repository. Determine the most logical structure for a wiki based on the repository's content.
@@ -1094,7 +1214,16 @@ Remember:
         
         // Update the prompt if edited
         const model_to_use = `${params.provider}/${params.isCustomModel ? params.customModel : params.model}`
-        prompt = await showPromptEditModal(prompt,model_to_use);
+        try {
+          prompt = await showPromptEditModal(
+            prompt,
+            model_to_use,
+            `Page Content Generation Prompt for ${page.title}`
+          );
+        } catch(err) {
+          console.log(err);
+          return;
+        }
       }
       return performPageRefresh(pageId, params, prompt);
                
@@ -1105,14 +1234,20 @@ Remember:
     ]
   );
 
-  async function analyzeRepository(fileTree: string, readme: string): Promise<{  
+  async function analyzeRepository(
+    fileTree: string | Array<{path: string, size: number, modified: number}>,
+    readme: string
+  ): Promise<{  
     type: string;  
     primaryLanguage: string;  
     framework: string;  
     architecturePattern: string;  
     complexityScore: number;  
   }> {  
-    const files = fileTree.split('\n').filter(f => f.trim());  
+    // const files = fileTree.split('\n').filter(f => f.trim());  
+    const files = typeof fileTree === 'string'   
+      ? fileTree.split('\n').filter(f => f.trim())  
+      : fileTree.map(item => item.path); 
       
     // Detect primary language  
     const languageExtensions = {  
@@ -1219,7 +1354,13 @@ Remember:
   }
 
   // Determine the wiki structure from repository data
-  const determineWikiStructure = useCallback(async (fileTree: string, readme: string, owner: string, repo: string) => {
+  const determineWikiStructure = useCallback(
+    async (
+      fileTree: string | Array<{path: string, size: number, modified: number}>,
+      readme: string | {project_purpose: string, key_features: string[], architecture_overview: string, main_technologies: string[], important_sections: string[]},
+      owner: string, 
+      repo: string
+    ) => {
     if (!owner || !repo) {
       setError('Invalid repository information. Owner and repo name are required.');
       setIsLoading(false);
@@ -1245,15 +1386,40 @@ Remember:
       // Get repository URL
       const repoUrl = getRepoUrl(effectiveRepoInfo);
 
+      let fileTreeString: string;  
+      if (typeof fileTree === 'string') {  
+        // Legacy format - already a string  
+        fileTreeString = fileTree;  
+      } else {
+        const filteredFiles = fileTree;
+        // // New structured format - convert to string, optionally filtering  
+        // // Filter out binary files and very large files for better analysis  
+        // const filteredFiles = fileTree.filter(item => {  
+        //   // Skip binary files  
+        //   if (item.is_binary) return false;  
+        //   // Skip files larger than 5MB  
+        //   if (item.size > 5 * 1024 * 1024) return false;  
+        //   return true;  
+        // });  
+          
+        // Sort by modification time (most recent first) to prioritize active files  
+        const sortedFiles = [...filteredFiles].sort((a, b) => b.modified - a.modified);  
+          
+        // Convert to string format  
+        fileTreeString = sortedFiles.map(item => item.path).join('\n');  
+          
+        console.log(`Filtered file tree: ${filteredFiles.length}/${fileTree.length} files (excluded ${fileTree.length - filteredFiles.length} binary/large files)`);  
+      }
+
       // const repoAnalysis = await analyzeRepository(fileTree, readme);      
-      const structurePrompt = await buildStructureGenerationPrompt(fileTree, readme, owner, repo);
+      const structurePrompt = await buildStructureGenerationPrompt(fileTreeString, readme, owner, repo);
 
       // confirm the prompt if enabled
       let finalPrompt = structurePrompt;
       if (enablePromptEditing) {
         try {
           const model_to_use = `${selectedProviderState}/${isCustomSelectedModelState ? customSelectedModelState : selectedModelState}`
-          finalPrompt = await showPromptEditModal(structurePrompt);
+          finalPrompt = await showPromptEditModal(structurePrompt, model_to_use, "Edit Wiki Structure Determination Prompt");
         } catch (err) {
           // The user cancelled the edit -- gracefully abort structure determination
           setStructureRequestInProgress(false);          
@@ -1704,8 +1870,11 @@ Remember:
           }
 
           const data = await response.json();
-          fileTreeData = data.file_tree;
-          readmeContent = data.readme;
+          // fileTreeData = data.file_tree;
+          fileTreeData = Array.isArray(data.file_tree)   
+            ? data.file_tree.map((item: { path: string }) => item.path).join('\n')  
+            : data.file_tree; // Fallback for backward compatibility
+                    readmeContent = data.readme;
           // For local repos, we can't determine the actual branch, so use 'main' as default
           setDefaultBranch('main');
         } catch (err) {
@@ -1984,8 +2153,30 @@ Remember:
         }
       }
 
+      let readmeAnalysis = readmeContent
+
+      const readmeTokens = Math.ceil(readmeContent.length / 4);
+      const fileTreeTokens = Math.ceil(fileTreeData.length / 4);
+      const totalTokens = readmeTokens + fileTreeTokens;
+      console.log(`README tokens: ${readmeTokens}, File tree tokens: ${fileTreeTokens}, Total: ${totalTokens}`);  
+      console.log('selectedModelState',selectedModelState, 'selectedProviderState', selectedProviderState);
+      const contextWindow = 5000; // Your Ollama model's context window  
+
+      if (totalTokens > contextWindow * 0.5 && readmeTokens > 5000) {  
+        // Large README - use multi-step approach  
+        console.log('README is large, analyzing separately...');  
+        setLoadingMessage('Analyzing README content...');  
+          
+        readmeAnalysis = await analyzeReadmeContent(readmeContent, owner, repo);  
+          
+        // setLoadingMessage(messages.loading?.determiningStructure || 'Determining wiki structure...');  
+        // await determineWikiStructure(fileTreeData, readmeAnalysis, owner, repo); 
+      } else {
+        console.log('README is small, using direct approach...'); 
+      }
+
       // Now determine the wiki structure
-      await determineWikiStructure(fileTreeData, readmeContent, owner, repo);
+      await determineWikiStructure(fileTreeData, readmeAnalysis, owner, repo);
 
     } catch (error) {
       console.error('Error fetching repository structure:', error);
@@ -2948,6 +3139,7 @@ Remember:
         isOpen={showPromptModal}
         prompt={promptToEdit}
         model={modelToShow}
+        title={promptModalTitle}
         // onApply={handleApplyPromptEdit}
         onApply={(editedPrompt: string) => {
           setShowPromptModal(false);

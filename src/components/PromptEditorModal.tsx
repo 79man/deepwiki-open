@@ -4,6 +4,7 @@ export interface PromptEditorModalProps {
   isOpen: boolean;
   prompt: string;
   model: string;
+  title: string;
   onApply: (editedPrompt: string) => void;
   onCancel: () => void;
 }
@@ -12,11 +13,13 @@ const PromptEditorModal: React.FC<PromptEditorModalProps> = ({
   isOpen,
   prompt,
   model,
+  title,
   onApply,
   onCancel,
 }) => {
   const [editedPrompt, setEditedPrompt] = useState<string>(prompt);
   const [editedModel, setEditedModel] = useState<string>(model);
+  const [dialogTitle, setDialogTitle] = useState<string>(title);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Reset edited prompt whenever modal opens or prompt changes
@@ -24,11 +27,12 @@ const PromptEditorModal: React.FC<PromptEditorModalProps> = ({
     if (isOpen) {
       setEditedPrompt(prompt);
       setEditedModel(model);
+      setDialogTitle(title);
       setTimeout(() => {
         textareaRef.current?.focus();
       }, 200);
     }
-  }, [isOpen, prompt, model]);
+  }, [isOpen, prompt, model, title]);
 
   if (!isOpen) return null;
 
@@ -46,7 +50,7 @@ const PromptEditorModal: React.FC<PromptEditorModalProps> = ({
             id="prompt-editor-title"
             className="text-lg font-semibold text-[var(--accent-primary)]"
           >
-            Edit Generation Prompt
+            {dialogTitle}
             <span className="text-xs font-normal ml-3 text-[var(--muted)] bg-[var(--background)] px-2 py-1 rounded border border-[var(--border-color)]/50">
               {editedPrompt.length} chars
             </span>
