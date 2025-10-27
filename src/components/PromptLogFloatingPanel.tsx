@@ -44,6 +44,21 @@ const PromptLogFloatingPanel: React.FC = () => {
     setTimeout(() => setToast(null), 1800);
   };
 
+  const [expandedContent, setExpandedContent] = useState<
+    Record<number, { prompt: boolean; response: boolean }>
+  >({});
+
+  const toggleContentExpansion = (idx: number, type: "prompt" | "response") => {
+    setExpandedContent((prev) => ({
+      ...prev,
+      [idx]: {
+        ...prev[idx],
+        [type]: !prev[idx]?.[type],
+      },
+    }));
+  };
+  const MAX_PREVIEW_LENGTH = 500;
+
   const formatLogEntryClipboard = (entry: PromptLogEntry) => {
     return [
       `### Prompt Log Entry`,
@@ -600,28 +615,78 @@ const PromptLogFloatingPanel: React.FC = () => {
                       )}
                     </span>
                   </div>
+                  {/* Prompt Section with Truncation */}
                   <div className="font-bold text-sm mb-1 text-[var(--accent-primary)]">
                     Prompt:
                   </div>
-                  {markdownMode[i] ? (
-                    <Markdown content={entry.prompt} />
-                  ) : (
-                    <pre className="bg-[var(--background)] rounded p-2 text-xs overflow-x-auto whitespace-pre-wrap">
-                      {entry.prompt}
-                    </pre>
-                  )}
+                  {(() => {
+                    const MAX_PREVIEW_LENGTH = 500;
+                    const isExpanded = expandedContent[i]?.prompt;
+                    const shouldTruncate =
+                      entry.prompt.length > MAX_PREVIEW_LENGTH;
+                    const displayContent =
+                      !shouldTruncate || isExpanded
+                        ? entry.prompt
+                        : entry.prompt.substring(0, MAX_PREVIEW_LENGTH) + "...";
 
-                  {/* Response (markdown or pre) */}
-                  <div className="font-bold text-sm mb-1 text-[var(--accent-primary)]">
+                    return (
+                      <>
+                        {markdownMode[i] ? (
+                          <Markdown content={displayContent} />
+                        ) : (
+                          <pre className="bg-[var(--background)] rounded p-2 text-xs overflow-x-auto whitespace-pre-wrap">
+                            {displayContent}
+                          </pre>
+                        )}
+                        {shouldTruncate && (
+                          <button
+                            onClick={() => toggleContentExpansion(i, "prompt")}
+                            className="text-xs text-[var(--accent-primary)] hover:underline mt-1"
+                          >
+                            {isExpanded ? "Show Less" : "Show More"}
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
+
+                  {/* Response Section with Truncation */}
+                  <div className="font-bold text-sm mb-1 mt-3 text-[var(--accent-primary)]">
                     Response:
                   </div>
-                  {markdownMode[i] ? (
-                    <Markdown content={entry.response} />
-                  ) : (
-                    <pre className="bg-[var(--background)] rounded p-2 text-xs overflow-x-auto whitespace-pre-wrap">
-                      {entry.response}
-                    </pre>
-                  )}
+                  {(() => {
+                    const MAX_PREVIEW_LENGTH = 500;
+                    const isExpanded = expandedContent[i]?.response;
+                    const shouldTruncate =
+                      entry.response.length > MAX_PREVIEW_LENGTH;
+                    const displayContent =
+                      !shouldTruncate || isExpanded
+                        ? entry.response
+                        : entry.response.substring(0, MAX_PREVIEW_LENGTH) +
+                          "...";
+
+                    return (
+                      <>
+                        {markdownMode[i] ? (
+                          <Markdown content={displayContent} />
+                        ) : (
+                          <pre className="bg-[var(--background)] rounded p-2 text-xs overflow-x-auto whitespace-pre-wrap">
+                            {displayContent}
+                          </pre>
+                        )}
+                        {shouldTruncate && (
+                          <button
+                            onClick={() =>
+                              toggleContentExpansion(i, "response")
+                            }
+                            className="text-xs text-[var(--accent-primary)] hover:underline mt-1"
+                          >
+                            {isExpanded ? "Show Less" : "Show More"}
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
                 </>
               )}
             </div>

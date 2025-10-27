@@ -35,6 +35,7 @@ interface WikiPage {
   content: string;
   filePaths: string[];
   importance: 'high' | 'medium' | 'low';
+  pageType?: 'architecture' | 'api' | 'configuration' | 'deployment' | 'data_model' | 'component' | 'general'; 
   relatedPages: string[];
   parentId?: string;
   isSection?: boolean;
@@ -494,14 +495,15 @@ export default function RepoWikiPage() {
     if (enablePromptEditing) {
       try {
         // Update the prompt if edited
-        const model_to_use = `${params.provider}/${params.isCustomModel ? params.customModel : params.model}`
+        const model_to_use = `${selectedProviderState}/${isCustomSelectedModelState ? customSelectedModelState : selectedModelState}`
         readmeAnalysisPrompt = await showPromptEditModal(
           readmeAnalysisPrompt,
           model_to_use,
-          "Edit Readme Analysis Prompt"
+          "Readme Analysis and Summarization Prompt"
         );
       } catch (err) {
         console.error("Error in editing Readme Analysis prompt", err);
+        return;
       }
     }
 
@@ -527,6 +529,7 @@ export default function RepoWikiPage() {
       modelIncludedDirs, modelIncludedFiles  
     );  
     
+    const requestStartTime = Date.now();
     try {  
       const response = await fetch(`/api/chat/stream`, {  
         method: 'POST',  
@@ -548,7 +551,16 @@ export default function RepoWikiPage() {
         const { done, value } = await reader.read();  
         if (done) break;  
         responseText += decoder.decode(value, { stream: true });  
-      }  
+      }
+      
+      addPromptLog({
+        source: 'ReadmeSummarize',
+        prompt: requestBody.messages.map(m => `${m.role}: ${m.content}`).join('\n\n'),
+        response: responseText,
+        timestamp: Date.now(),
+        model: `${selectedProviderState}/${isCustomSelectedModelState ? customSelectedModelState : selectedModelState}`,
+        timeTaken: (Date.now() - requestStartTime) / 1000,
+      });
     
       // Extract JSON from response (may be wrapped in markdown)  
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);  
@@ -633,6 +645,15 @@ When designing the wiki structure, include pages that would benefit from visual 
 - State machines
 - Class hierarchies
 
+When designing the wiki structure, classify each page with an appropriate page_type:  
+- **architecture**: System design, component relationships, architectural patterns  
+- **api**: API endpoints, request/response formats, authentication  
+- **configuration**: Configuration files, environment variables, settings  
+- **deployment**: Deployment procedures, infrastructure, CI/CD  
+- **data_model**: Database schemas, data structures, entity relationships  
+- **component**: UI components, modules, widgets (frontend or backend)  
+- **general**: Overview, getting started, general documentation
+
 ${isComprehensiveView ? `
 Create a structured wiki with the following main sections:
 - Overview (general information about the project)
@@ -669,6 +690,7 @@ Return your analysis in the following XML format:
     <page id="page-1">
       <title>[Page title]</title>
       <description>[Brief description of what this page will cover]</description>
+      <page_type>architecture|api|configuration|deployment|data_model|component|general</page_type>
       <importance>high|medium|low</importance>
       <relevant_files>
         <file_path>[Path to a relevant file]</file_path>
@@ -693,6 +715,7 @@ Return your analysis in the following XML format:
     <page id="page-1">
       <title>[Page title]</title>
       <description>[Brief description of what this page will cover]</description>
+      <page_type>architecture|api|configuration|deployment|data_model|component|general</page_type>
       <importance>high|medium|low</importance>
       <relevant_files>
         <file_path>[Path to a relevant file]</file_path>
@@ -725,15 +748,71 @@ IMPORTANT:
     return promptContent;
   }
 
+  const getTypeSpecificInstructions = (pageType?: string): string => {  
+    switch(pageType) {  
+      case 'architecture':  
+        return `  
+ARCHITECTURE PAGE SPECIFIC INSTRUCTIONS:  
+- Focus heavily on system design and component relationships  
+- Include at least 3 architecture diagrams (system overview, component interaction, data flow)  
+- Emphasize design patterns and architectural decisions  
+- Explain scalability and performance considerations`;  
+        
+      case 'api':  
+        return `  
+API DOCUMENTATION SPECIFIC INSTRUCTIONS:  
+- Create comprehensive tables for all endpoints (method, path, parameters, responses)  
+- Include request/response examples for each endpoint  
+- Document authentication and authorization requirements  
+- Explain error codes and handling`;  
+        
+      case 'configuration':  
+        return `  
+CONFIGURATION PAGE SPECIFIC INSTRUCTIONS:  
+- Create detailed tables of all configuration options  
+- Include default values, types, and constraints  
+- Provide examples for common configuration scenarios`;  
+        
+      case 'deployment':  
+        return `  
+DEPLOYMENT PAGE SPECIFIC INSTRUCTIONS:  
+- Provide step-by-step deployment procedures  
+- Include infrastructure diagrams  
+- Document prerequisites and dependencies`;  
+        
+      case 'data_model':  
+        return `  
+DATA MODEL PAGE SPECIFIC INSTRUCTIONS:  
+- Use ER diagrams extensively to show relationships  
+- Create comprehensive tables for all entities/models  
+- Document field types, constraints, and relationships`;  
+        
+      case 'component':  
+        return `  
+COMPONENT PAGE SPECIFIC INSTRUCTIONS:  
+- Focus on component hierarchy and interfaces  
+- Include component interaction diagrams  
+- Document props, state, and lifecycle`;  
+        
+      default:  
+        return '';  
+    }  
+  }
+
   const buildPageGenerationPrompt= (
     page: WikiPage, 
     params?: ModelSelectionParams
   ) => {  
     const filePaths = page.filePaths;
+    // Get type-specific instructions based on page_type  
+    const typeSpecificInstructions = getTypeSpecificInstructions(page.pageType); 
+
     // Create the prompt content - simplified to avoid message dialogs
     const promptContent =
 `You are an expert technical writer and software architect.
 Your task is to generate a comprehensive and accurate technical wiki page in Markdown format about a specific feature, system, or module within a given software project.
+
+${typeSpecificInstructions}
 
 You will be given:
 1. The "[WIKI_PAGE_TOPIC]" for the page you need to create.
@@ -1636,6 +1715,7 @@ Remember:
         const id = pageEl.getAttribute('id') || `page-${pages.length + 1}`;
         const titleEl = pageEl.querySelector('title');
         const importanceEl = pageEl.querySelector('importance');
+        const pageTypeEl = pageEl.querySelector('page_type');
         const filePathEls = pageEl.querySelectorAll('file_path');
         const relatedEls = pageEl.querySelectorAll('related');
 
@@ -1644,6 +1724,11 @@ Remember:
           (importanceEl.textContent === 'high' ? 'high' :
             importanceEl.textContent === 'medium' ? 'medium' : 'low') : 'medium';
 
+        // Extract page type  
+        const pageType = pageTypeEl ?   
+          (pageTypeEl.textContent as 'architecture' | 'api' | 'configuration' | 'deployment' | 'data_model' | 'component' | 'general') :   
+          undefined;  
+        
         const filePaths: string[] = [];
         filePathEls.forEach(el => {
           if (el.textContent) filePaths.push(el.textContent);
@@ -1660,6 +1745,7 @@ Remember:
           content: '', // Will be generated later
           filePaths,
           importance,
+          pageType,
           relatedPages
         });
       });

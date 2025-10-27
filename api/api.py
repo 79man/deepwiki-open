@@ -104,6 +104,7 @@ class WikiPage(BaseModel):
     content: str
     filePaths: List[str]
     importance: str  # Should ideally be Literal['high', 'medium', 'low']
+    page_type: Optional[str] = None # Should ideally be Literal['architecture' | 'api' | 'configuration' | 'deployment' | 'data_model' | 'component' | 'general']
     relatedPages: List[str]
 
 
