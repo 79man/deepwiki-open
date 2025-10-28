@@ -104,7 +104,8 @@ class WikiPage(BaseModel):
     content: str
     filePaths: List[str]
     importance: str  # Should ideally be Literal['high', 'medium', 'low']
-    page_type: Optional[str] = None # Should ideally be Literal['architecture' | 'api' | 'configuration' | 'deployment' | 'data_model' | 'component' | 'general']
+    # Should ideally be Literal['architecture' | 'api' | 'configuration' | 'deployment' | 'data_model' | 'component' | 'general']
+    page_type: Optional[str] = None
     relatedPages: List[str]
 
 
@@ -385,7 +386,17 @@ async def export_wiki(request: WikiExportRequest):
 
 
 @app.get("/local_repo/structure")
-async def get_local_repo_structure(path: str = Query(None, description="Path to local repository")):
+async def get_local_repo_structure(
+    path: str = Query(None, description="Path to local repository"),
+    excluded_dirs: str = Query(
+        None, description="Newline-separated list of directories to exclude"),
+    excluded_files: str = Query(
+        None, description="Newline-separated list of file patterns to exclude"),
+    included_dirs: str = Query(
+        None, description="Newline-separated list of directories to include"),
+    included_files: str = Query(
+        None, description="Newline-separated list of file patterns to include")
+):
     """Return the file tree and README content for a local repository."""
     if not path:
         return JSONResponse(
@@ -402,30 +413,40 @@ async def get_local_repo_structure(path: str = Query(None, description="Path to 
 
     try:
         logger.info(f"Processing local repository at: {path}")
-        file_tree_lines = []
+        # Parse filter parameters
+        excluded_dir_list = set([d.strip() for d in excluded_dirs.split('\n') if d.strip()] if excluded_dirs else [])
+        excluded_file_list = set([f.strip() for f in excluded_files.split('\n') if f.strip()] if excluded_files else [])
+        included_dir_list = set([d.strip() for d in included_dirs.split('\n') if d.strip()] if included_dirs else [])
+        included_file_list = set([f.strip() for f in included_files.split('\n') if f.strip()] if included_files else [])
+
+        # file_tree_lines = []
         file_tree_data = []
         readme_content = ""
 
         gitignore_spec = load_gitignore_patterns(path)
+        final_excluded_dir_list = EXCLUDED_DIRS.union(set(excluded_dir_list))
+        final_excluded_file_list = EXCLUDED_FILES.union(set(excluded_file_list))
+
+        logger.info(f'final_excluded_dir_list: {final_excluded_dir_list}')
+        logger.info(f'final_excluded_file_list: {final_excluded_file_list}')
 
         for root, dirs, files in os.walk(path):
-            # Exclude hidden dirs/files and virtual envs
-            # dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__' and d != 'node_modules' and d != '.venv']
-            dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
+            # eliminate dirs in EXCLUDED_DIRS and excluded_dir_list unless in included_dir_list
+            dirs[:] = [d for d in dirs if (d not in final_excluded_dir_list) or d in included_dir_list]
+            
+            # Apply .gitignore patterns
             if gitignore_spec:
                 dirs[:] = [
                     d for d in dirs if not gitignore_spec.match_file(os.path.relpath(os.path.join(root, d), path))]
 
-            # for file in files:
-            #     if file.startswith('.') or file == '__init__.py' or file == '.DS_Store':
-            #         continue
-
-            # eliminate files matching EXCLUDED_FILES using fnmatch.fnmatch
+            # eliminate files matching EXCLUDED_FILES using fnmatch.fnmatch unless in included_file_list
+            
             files[:] = [
                 f for f in files
-                if not any(fnmatch.fnmatch(f, pattern) for pattern in EXCLUDED_FILES)
+                if not any(fnmatch.fnmatch(f, pattern) for pattern in final_excluded_file_list) or any(fnmatch.fnmatch(f, pattern) for pattern in included_file_list)
             ]
 
+            # Apply .gitignore patterns
             if gitignore_spec:
                 files[:] = [
                     f for f in files
@@ -433,12 +454,6 @@ async def get_local_repo_structure(path: str = Query(None, description="Path to 
                 ]
 
             for file in files:
-                # rel_dir = os.path.relpath(root, path)
-                # rel_file = os.path.join(
-                #     rel_dir, file) if rel_dir != '.' else file
-
-                # file_tree_lines.append(rel_file)
-
                 file_path = os.path.join(root, file)
                 rel_path = os.path.relpath(file_path, path)
                 try:
